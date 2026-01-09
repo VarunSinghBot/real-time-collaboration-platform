@@ -1,0 +1,8 @@
+{
+  "name": "api",
+  "private": true,
+  "scripts": {
+    "dev": "powershell -c \"$env:GOCACHE='C:\\Users\\varun\\go-build'; $env:GOPATH='C:\\Users\\varun\\go'; go run main.go\"",
+    "build": "go build -o dist/server"
+  }
+}

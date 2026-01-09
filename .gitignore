@@ -1,0 +1,45 @@
+# =====================
+# Node / JavaScript
+# =====================
+node_modules/
+package-lock.json
+pnpm-lock.yaml
+yarn.lock
+.vscode/
+dist/
+.next/
+out/
+.env
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
+*.log
+
+# =====================
+# Go / Backend
+# =====================
+*.exe
+*.out
+*.test
+bin/
+vendor/
+.env
+
+# =====================
+# Turbo / Monorepo
+# =====================
+.cache/
+.cache-loader/
+turbo-build/
+.DS_Store
+
+# =====================
+# OS / IDE files
+# =====================
+Thumbs.db
+*.swp
+*.swo
+.idea/
+.vscode/
+*.iml
