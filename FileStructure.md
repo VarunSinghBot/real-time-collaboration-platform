@@ -1,4 +1,5 @@
-What the 
+What the file struc should look like
+
 my-collab-platform/          # Root of Turborepo
 ├─ apps/
 │   ├─ web/                  # Next.js frontend
@@ -77,3 +78,40 @@ my-collab-platform/          # Root of Turborepo
 ├─ turbo.json                 
 ├─ tsconfig.base.json         
 └─ .gitignore
+
+
+Dashboard :
+Dashboard (apps/web/app/dashboard/page.tsx)
+├─ Navbar (apps/web/components/Navbar.tsx)
+│   ├─ Logo / Brand
+│   ├─ Search
+│   ├─ Notifications
+│   └─ Profile / Settings
+│
+├─ Sidebar (apps/web/components/Sidebar.tsx)
+│   ├─ Dashboard (link)
+│   ├─ Tasks
+│   ├─ Calls
+│   ├─ Whiteboard
+│   └─ Settings
+│
+├─ Main Content Area
+│   ├─ Top Section: Summary / Analytics
+│   │   ├─ AnalyticsChart.tsx
+│   │   └─ Key Stats Cards
+│   │       ├─ Total Tasks
+│   │       ├─ Completed Tasks
+│   │       └─ Active Calls
+│   │
+│   ├─ Task Section
+│   │   ├─ TaskList.tsx         # Lists tasks assigned to user
+│   │   └─ TaskCard.tsx         # Individual task component
+│   │
+│   ├─ Call Section (optional preview)
+│   │   └─ Upcoming / Ongoing Calls
+│   │
+│   └─ Whiteboard Quick Access
+│       └─ Mini preview or button to open full whiteboard
+│
+└─ Footer / Optional
+    └─ Links / copyright info

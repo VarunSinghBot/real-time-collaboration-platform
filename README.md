@@ -2,7 +2,6 @@
 
 ---
 
-
 ## **Overview**
 
 **collab-platform** is a **full-stack team collaboration and productivity platform** built with  **Next.js (frontend), Go (backend), and Prisma (database)** .
