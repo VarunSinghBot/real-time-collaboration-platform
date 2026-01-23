@@ -1,0 +1,79 @@
+package api
+
+import (
+	"collab-platform/api/internal/api/models"
+	"collab-platform/api/internal/api/routes"
+	"context"
+	"encoding/json"
+	"net/http"
+	"os"
+	"time"
+
+	"github.com/go-chi/chi/v5"
+	"github.com/go-chi/cors"
+)
+
+func SetupRouter() http.Handler {
+	r := chi.NewRouter()
+
+	// CORS middleware
+	r.Use(cors.Handler(cors.Options{
+		AllowedOrigins:   []string{os.Getenv("CORS_ORIGIN")},
+		AllowedMethods:   []string{"GET", "POST", "PUT", "DELETE", "OPTIONS"},
+		AllowedHeaders:   []string{"Accept", "Authorization", "Content-Type", "X-CSRF-Token"},
+		ExposedHeaders:   []string{"Link"},
+		AllowCredentials: true,
+		MaxAge:           300,
+	}))
+
+	// Inject DB into context
+	r.Use(func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			ctx := context.WithValue(r.Context(), "db", DB)
+			next.ServeHTTP(w, r.WithContext(ctx))
+		})
+	})
+
+	// JSON middleware example
+	r.Use(func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			next.ServeHTTP(w, r)
+		})
+	})
+
+	// Routesswitch the
+	r.Get("/", func(w http.ResponseWriter, r *http.Request) {
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"message":   "Welcome to the API!",
+			"endpoints": []string{"/api/auth/signup", "/api/auth/login", "/api/v1/users"},
+		})
+	})
+
+	r.Get("/health", func(w http.ResponseWriter, r *http.Request) {
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"status":    "OK",
+			"timestamp": time.Now().UTC(),
+		})
+	})
+
+	// API routes
+	r.Route("/api", func(r chi.Router) {
+		// Auth routes
+		routes.SetupAuthRoutes(r)
+
+		// Example route: list users
+		r.Route("/v1/users", func(r chi.Router) {
+			r.Get("/", func(w http.ResponseWriter, r *http.Request) {
+				var users []interface{}
+				if err := DB.Model(&models.User{}).Find(&users).Error; err != nil {
+					http.Error(w, err.Error(), 500)
+					return
+				}
+				json.NewEncoder(w).Encode(users)
+			})
+		})
+	})
+
+	return r
+}
