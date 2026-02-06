@@ -4,10 +4,11 @@ import { useState, useEffect } from "react";
 import Link from "next/link";
 import Image from "next/image";
 import { useRouter } from "next/navigation";
-import apiClient from "@/lib/axios";
+import { useAuth } from "@repo/auth";
 
 export default function LoginPage() {
   const router = useRouter();
+  const { login, loginWithGoogle, isAuthenticated, loading: authLoading } = useAuth();
   const [formData, setFormData] = useState({    
     email: "",
     password: "",
@@ -19,11 +20,10 @@ export default function LoginPage() {
 
   // Check if user is already logged in
   useEffect(() => {
-    const token = localStorage.getItem("token");
-    if (token) {
+    if (!authLoading && isAuthenticated) {
       router.push("/dashboard");
     }
-  }, [router]);
+  }, [isAuthenticated, authLoading, router]);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -31,33 +31,35 @@ export default function LoginPage() {
     setLoading(true);
 
     try {
-      const response = await apiClient.post("/api/auth/login", formData);
-      const data = response.data;
-
-      // Store token in localStorage
-      localStorage.setItem("token", data.token);
-      
-      // Store user data
-      localStorage.setItem("user", JSON.stringify(data.user));
-
-      // Redirect to dashboard
+      await login(formData);
       router.push("/dashboard");
     } catch (err: any) {
-      setError(err.response?.data?.error || err.message || "Something went wrong");
+      setError(err.message || "Invalid email or password");
     } finally {
       setLoading(false);
     }
   };
 
-  const handleGoogleLogin = () => {
-    // Handle Google OAuth
-    console.log("Google login clicked");
+  const handleGoogleLogin = async () => {
+    try {
+      await loginWithGoogle();
+    } catch (err: any) {
+      setError(err.message || "Failed to initiate Google login");
+    }
   };
+
+  if (authLoading) {
+    return (
+      <div className="min-h-screen flex items-center justify-center">
+        <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-purple-600"></div>
+      </div>
+    );
+  }
 
   return (
     <div className="min-h-screen flex">
       {/* Left side - Image */}
-      <div className="hidden lg:flex lg:w-1/2 relative bg-gradient-to-br from-purple-50 to-purple-100">
+      <div className="hidden lg:flex lg:w-1/2 relative bg-linear-to-br from-purple-50 to-purple-100">
         <Image 
           src="/UserAuthImage.svg" 
           alt="User Authentication" 

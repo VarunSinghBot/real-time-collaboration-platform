@@ -100,21 +100,35 @@ func Signup(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Generate JWT token
-	token, err := utils.GenerateJWT(user.ID, user.Email)
+	// Generate tokens (access + refresh)
+	tokenPair, err := utils.GenerateTokenPair(user.ID, user.Email)
 	if err != nil {
-		http.Error(w, `{"error": "Failed to generate token"}`, http.StatusInternalServerError)
+		http.Error(w, `{"error": "Failed to generate tokens"}`, http.StatusInternalServerError)
+		return
+	}
+
+	// Store refresh token in database
+	refreshToken := models.RefreshToken{
+		UserID:    user.ID,
+		Token:     tokenPair.RefreshToken,
+		ExpiresAt: utils.GetRefreshTokenExpiry(),
+	}
+	if err := db.Create(&refreshToken).Error; err != nil {
+		http.Error(w, `{"error": "Failed to store refresh token"}`, http.StatusInternalServerError)
 		return
 	}
 
 	// Return response (don't send password)
-	response := AuthResponse{
-		Token: token,
-		User: map[string]interface{}{
+	response := map[string]interface{}{
+		"accessToken":  tokenPair.AccessToken,
+		"refreshToken": tokenPair.RefreshToken,
+		"expiresIn":    tokenPair.ExpiresIn,
+		"user": map[string]interface{}{
 			"id":       user.ID,
 			"email":    user.Email,
 			"username": user.Username,
 			"name":     user.Name,
+			"avatar":   user.Avatar,
 		},
 	}
 
@@ -164,21 +178,35 @@ func Login(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Generate JWT token
-	token, err := utils.GenerateJWT(user.ID, user.Email)
+	// Generate tokens (access + refresh)
+	tokenPair, err := utils.GenerateTokenPair(user.ID, user.Email)
 	if err != nil {
-		http.Error(w, `{"error": "Failed to generate token"}`, http.StatusInternalServerError)
+		http.Error(w, `{"error": "Failed to generate tokens"}`, http.StatusInternalServerError)
+		return
+	}
+
+	// Store refresh token in database
+	refreshToken := models.RefreshToken{
+		UserID:    user.ID,
+		Token:     tokenPair.RefreshToken,
+		ExpiresAt: utils.GetRefreshTokenExpiry(),
+	}
+	if err := db.Create(&refreshToken).Error; err != nil {
+		http.Error(w, `{"error": "Failed to store refresh token"}`, http.StatusInternalServerError)
 		return
 	}
 
 	// Return response
-	response := AuthResponse{
-		Token: token,
-		User: map[string]interface{}{
+	response := map[string]interface{}{
+		"accessToken":  tokenPair.AccessToken,
+		"refreshToken": tokenPair.RefreshToken,
+		"expiresIn":    tokenPair.ExpiresIn,
+		"user": map[string]interface{}{
 			"id":       user.ID,
 			"email":    user.Email,
 			"username": user.Username,
 			"name":     user.Name,
+			"avatar":   user.Avatar,
 		},
 	}
 

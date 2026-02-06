@@ -10,15 +10,21 @@ import (
 
 // User represents a user in the system
 type User struct {
-	ID        string         `gorm:"primaryKey;type:varchar(36)" json:"id"`
-	Username  *string        `gorm:"uniqueIndex;type:varchar(50)" json:"username,omitempty"`
-	Name      *string        `gorm:"type:varchar(100)" json:"name,omitempty"`
-	Email     string         `gorm:"uniqueIndex;not null;type:varchar(255)" json:"email"`
-	Password  *string        `gorm:"type:varchar(255)" json:"-"` // nullable for OAuth users
-	GoogleID  *string        `gorm:"uniqueIndex;type:varchar(255)" json:"googleId,omitempty"`
-	CreatedAt time.Time      `gorm:"not null;default:CURRENT_TIMESTAMP" json:"createdAt"`
-	UpdatedAt time.Time      `gorm:"not null;default:CURRENT_TIMESTAMP" json:"updatedAt"`
-	DeletedAt gorm.DeletedAt `gorm:"index" json:"-"`
+	ID               string         `gorm:"primaryKey;type:varchar(36)" json:"id"`
+	Username         *string        `gorm:"uniqueIndex;type:varchar(50)" json:"username,omitempty"`
+	Name             *string        `gorm:"type:varchar(100)" json:"name,omitempty"`
+	Email            string         `gorm:"uniqueIndex;not null;type:varchar(255)" json:"email"`
+	Password         *string        `gorm:"type:varchar(255)" json:"-"` // nullable for OAuth users
+	Avatar           *string        `gorm:"type:text" json:"avatar,omitempty"`
+	EmailVerified    bool           `gorm:"default:false" json:"emailVerified"`
+	TwoFactorEnabled bool           `gorm:"default:false" json:"twoFactorEnabled"`
+	CreatedAt        time.Time      `gorm:"not null;default:CURRENT_TIMESTAMP" json:"createdAt"`
+	UpdatedAt        time.Time      `gorm:"not null;default:CURRENT_TIMESTAMP" json:"updatedAt"`
+	DeletedAt        gorm.DeletedAt `gorm:"index" json:"-"`
+
+	// Relations
+	OAuthProviders []OAuthProvider `gorm:"foreignKey:UserID" json:"oauthProviders,omitempty"`
+	RefreshTokens  []RefreshToken  `gorm:"foreignKey:UserID" json:"-"`
 }
 
 // TableName overrides the table name

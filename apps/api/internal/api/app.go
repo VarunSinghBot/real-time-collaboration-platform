@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -16,9 +17,13 @@ import (
 func SetupRouter() http.Handler {
 	r := chi.NewRouter()
 
-	// CORS middleware
+	// CORS middleware - parse multiple origins from comma-separated env var
+	corsOrigins := strings.Split(os.Getenv("CORS_ORIGIN"), ",")
+	for i := range corsOrigins {
+		corsOrigins[i] = strings.TrimSpace(corsOrigins[i])
+	}
 	r.Use(cors.Handler(cors.Options{
-		AllowedOrigins:   []string{os.Getenv("CORS_ORIGIN")},
+		AllowedOrigins:   corsOrigins,
 		AllowedMethods:   []string{"GET", "POST", "PUT", "DELETE", "OPTIONS"},
 		AllowedHeaders:   []string{"Accept", "Authorization", "Content-Type", "X-CSRF-Token"},
 		ExposedHeaders:   []string{"Link"},

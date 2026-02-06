@@ -4,10 +4,11 @@ import { useState, useEffect } from "react";
 import Link from "next/link";
 import Image from "next/image";
 import { useRouter } from "next/navigation";
-import apiClient from "@/lib/axios";
+import { useAuth } from "@repo/auth";
 
 export default function SignupPage() {
   const router = useRouter();
+  const { signup, loginWithGoogle, isAuthenticated, loading: authLoading } = useAuth();
   const [formData, setFormData] = useState({
     username: "",
     name: "",
@@ -23,11 +24,10 @@ export default function SignupPage() {
 
   // Check if user is already logged in
   useEffect(() => {
-    const token = localStorage.getItem("token");
-    if (token) {
+    if (!authLoading && isAuthenticated) {
       router.push("/dashboard");
     }
-  }, [router]);
+  }, [isAuthenticated, authLoading, router]);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -39,37 +39,44 @@ export default function SignupPage() {
       return;
     }
 
+    if (!agreedToTerms) {
+      setError("Please agree to the terms and conditions");
+      return;
+    }
+
     setLoading(true);
 
     try {
-      const response = await apiClient.post("/api/auth/signup", {
+      await signup({
         username: formData.username,
         name: formData.name,
         email: formData.email,
         password: formData.password,
       });
 
-      const data = response.data;
-
-      // Store token in localStorage
-      localStorage.setItem("token", data.token);
-      
-      // Store user data
-      localStorage.setItem("user", JSON.stringify(data.user));
-
-      // Redirect to dashboard
       router.push("/dashboard");
     } catch (err: any) {
-      setError(err.response?.data?.error || err.message || "Something went wrong");
+      setError(err.message || "Failed to create account");
     } finally {
       setLoading(false);
     }
   };
 
-  const handleGoogleSignup = () => {
-    // Handle Google OAuth
-    console.log("Google signup clicked");
+  const handleGoogleSignup = async () => {
+    try {
+      await loginWithGoogle();
+    } catch (err: any) {
+      setError(err.message || "Failed to initiate Google signup");
+    }
   };
+
+  if (authLoading) {
+    return (
+      <div className="min-h-screen flex items-center justify-center">
+        <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-purple-600"></div>
+      </div>
+    );
+  }
 
   return (
     <div className="min-h-screen flex">

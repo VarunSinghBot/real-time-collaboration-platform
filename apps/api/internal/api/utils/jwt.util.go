@@ -1,6 +1,8 @@
 package utils
 
 import (
+	"crypto/rand"
+	"encoding/base64"
 	"errors"
 	"os"
 	"time"
@@ -14,25 +16,64 @@ type Claims struct {
 	jwt.RegisteredClaims
 }
 
-// GenerateJWT generates a JWT token for the given user
+type TokenPair struct {
+	AccessToken  string `json:"accessToken"`
+	RefreshToken string `json:"refreshToken"`
+	ExpiresIn    int64  `json:"expiresIn"` // Access token expiry in seconds
+}
+
+// GenerateJWT generates a JWT access token for the given user
 func GenerateJWT(userID, email string) (string, error) {
 	secret := os.Getenv("JWT_SECRET")
 	if secret == "" {
 		return "", errors.New("JWT_SECRET not set")
 	}
 
+	// Access tokens expire in 15 minutes for security
+	expiresAt := time.Now().Add(15 * time.Minute)
+
 	claims := Claims{
 		UserID: userID,
 		Email:  email,
 		RegisteredClaims: jwt.RegisteredClaims{
-			ExpiresAt: jwt.NewNumericDate(time.Now().Add(24 * time.Hour)), // 24 hours
+			ExpiresAt: jwt.NewNumericDate(expiresAt),
 			IssuedAt:  jwt.NewNumericDate(time.Now()),
 			NotBefore: jwt.NewNumericDate(time.Now()),
+			Issuer:    "collab-platform",
 		},
 	}
 
 	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
 	return token.SignedString([]byte(secret))
+}
+
+// GenerateTokenPair generates both access and refresh tokens
+func GenerateTokenPair(userID, email string) (*TokenPair, error) {
+	accessToken, err := GenerateJWT(userID, email)
+	if err != nil {
+		return nil, err
+	}
+
+	refreshToken, err := GenerateRefreshToken()
+	if err != nil {
+		return nil, err
+	}
+
+	return &TokenPair{
+		AccessToken:  accessToken,
+		RefreshToken: refreshToken,
+		ExpiresIn:    900, // 15 minutes in seconds
+	}, nil
+}
+
+// GenerateRefreshToken generates a cryptographically secure refresh token
+func GenerateRefreshToken() (string, error) {
+	b := make([]byte, 64)
+	_, err := rand.Read(b)
+	if err != nil {
+		return "", err
+	}
+	return base64.URLEncoding.EncodeToString(b), nil
 }
 
 // ValidateJWT validates and parses a JWT token
@@ -58,4 +99,10 @@ func ValidateJWT(tokenString string) (*Claims, error) {
 	}
 
 	return nil, errors.New("invalid token")
+}
+
+// GetRefreshTokenExpiry returns the standard refresh token expiry duration
+func GetRefreshTokenExpiry() time.Time {
+	// Refresh tokens expire in 7 days
+	return time.Now().Add(7 * 24 * time.Hour)
 }

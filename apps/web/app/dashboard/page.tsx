@@ -1,58 +1,48 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect } from "react";
 import { useRouter } from "next/navigation";
-import apiClient from "@/lib/axios";
-import type { User } from "@repo/types/user";
+import { useAuth } from "@repo/auth";
 
 export default function Dashboard() {
   const router = useRouter();
-  const [user, setUser] = useState<User | null>(null);
-  const [loading, setLoading] = useState(true);
+  const { user, loading, isAuthenticated, logout } = useAuth();
 
   useEffect(() => {
-    const verifyToken = async () => {
-      const token = localStorage.getItem("token");
-      console.log("Token from localStorage:", token);
-      
-      // If no token, redirect to login
-      if (!token) {
-        console.log("No token found, redirecting to login");
-        router.push("/login");
-        return;
-      }
+    if (!loading && !isAuthenticated) {
+      router.push("/login");
+    }
+  }, [isAuthenticated, loading, router]);
 
-      try {
-        console.log("Calling /api/auth/me...");
-        // Verify token with backend using axios
-        const response = await apiClient.get("/api/auth/me");
-        console.log("API Response:", response.data);
-        setUser(response.data);
-        console.log("User set successfully:", response.data);
-      } catch (err) {
-        console.error("Error verifying token:", err);
-        // Token is invalid, clear storage and redirect to login
-        localStorage.removeItem("token");
-        localStorage.removeItem("user");
-        router.push("/login");
-      } finally {
-        console.log("Setting loading to false");
-        setLoading(false);
-      }
-    };
-
-    verifyToken();
-  }, [router]);
-
-  const handleLogout = () => {
-    localStorage.removeItem("token");
-    localStorage.removeItem("user");
+  const handleLogout = async () => {
+    await logout();
     router.push("/login");
   };
 
   const handleMakeWhiteboard = () => {
-    // TODO: Navigate to whiteboard creation
-    console.log("Make a whiteboard clicked");
+    // Get current auth tokens
+    const tokensStr = typeof window !== "undefined" ? localStorage.getItem("auth_tokens") : null;
+    
+    if (tokensStr) {
+      try {
+        const tokens = JSON.parse(tokensStr);
+        const whiteboardUrl = process.env.NEXT_PUBLIC_WHITEBOARD_URL || "http://localhost:5173/whiteboard";
+        
+        // Pass tokens to whiteboard via URL for seamless auth
+        const urlWithTokens = `${whiteboardUrl}?accessToken=${encodeURIComponent(tokens.accessToken)}&refreshToken=${encodeURIComponent(tokens.refreshToken)}&expiresIn=${tokens.expiresIn}`;
+        
+        window.open(urlWithTokens, "_blank", "noopener,noreferrer");
+      } catch (err) {
+        console.error("Failed to parse tokens:", err);
+        // Fallback to opening without tokens
+        const whiteboardUrl = process.env.NEXT_PUBLIC_WHITEBOARD_URL || "http://localhost:5173/whiteboard";
+        window.open(whiteboardUrl, "_blank", "noopener,noreferrer");
+      }
+    } else {
+      // No tokens found, open whiteboard anyway (will redirect to login)
+      const whiteboardUrl = process.env.NEXT_PUBLIC_WHITEBOARD_URL || "http://localhost:5173/whiteboard";
+      window.open(whiteboardUrl, "_blank", "noopener,noreferrer");
+    }
   };
 
   const handleSeeAllWhiteboards = () => {
@@ -61,7 +51,6 @@ export default function Dashboard() {
   };
 
   if (loading) {
-    console.log("Rendering loading state");
     return (
       <div className="flex flex-col items-center justify-center h-screen bg-linear-to-br from-purple-50 to-purple-100">
         <div className="relative">
@@ -77,24 +66,8 @@ export default function Dashboard() {
   }
 
   if (!user) {
-    console.log("User is null, showing error state");
-    return (
-      <div className="flex flex-col items-center justify-center h-screen bg-linear-to-br from-purple-50 to-purple-100">
-        <div className="text-center">
-          <h2 className="text-2xl font-bold text-red-600 mb-4">Error Loading User Data</h2>
-          <p className="text-gray-700 mb-6">Unable to load user information.</p>
-          <button
-            onClick={() => window.location.reload()}
-            className="px-6 py-3 bg-purple-600 cursor-pointer text-white rounded-lg hover:bg-purple-700 transition-colors"
-          >
-            Retry
-          </button>
-        </div>
-      </div>
-    );
+    return null;
   }
-
-  console.log("Rendering dashboard with user:", user);
 
   // Get user initials for avatar
   const getInitials = (name: string) => {
@@ -116,13 +89,13 @@ export default function Dashboard() {
             <div className="flex items-center space-x-4">
               {/* User Avatar */}
               <div className="w-12 h-12 rounded-full bg-linear-to-br from-purple-500 to-purple-700 flex items-center justify-center text-white font-bold shadow-lg text-lg">
-                {getInitials(user.name)}
+                {user.name ? getInitials(user.name) : user.email?.charAt(0).toUpperCase()}
               </div>
               
               {/* User Name */}
               <div className="flex flex-col">
                 <span className="text-sm font-bold text-gray-900">
-                  {user.name}
+                  {user.name || user.email}
                 </span>
                 <span className="text-xs text-purple-600 font-medium">
                   Welcome back
