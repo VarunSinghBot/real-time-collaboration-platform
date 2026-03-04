@@ -35,18 +35,18 @@ function BoardThumbnail({ board, onClick }: { board: WhiteboardItem; onClick: ()
       whileHover={{ scale: 1.04 }}
       whileTap={{ scale: 0.97 }}
       onClick={onClick}
-      className={`relative cursor-pointer rounded-2xl overflow-hidden bg-gradient-to-br ${gradient} flex-shrink-0 w-36 h-28 group`}
+      className={`relative cursor-pointer rounded-2xl overflow-hidden bg-linear-to-br ${gradient} shrink-0 w-32 h-24 sm:w-36 sm:h-28 group`}
     >
       <div className="absolute inset-0 flex flex-col items-center justify-center">
-        <span className="text-3xl font-black text-white/25 select-none">{board.title.slice(0, 2).toUpperCase()}</span>
+        <span className="text-2xl sm:text-3xl font-black text-white/25 select-none">{board.title.slice(0, 2).toUpperCase()}</span>
       </div>
       <div className="absolute inset-0 bg-black/30 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center">
-        <svg className="w-7 h-7 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+        <svg className="w-6 h-6 sm:w-7 sm:h-7 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
           <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M14 5l7 7m0 0l-7 7m7-7H3" />
         </svg>
       </div>
-      <div className="absolute bottom-0 left-0 right-0 px-3 py-2 bg-gradient-to-t from-black/60 to-transparent">
-        <p className="text-white text-xs font-semibold truncate">{board.title}</p>
+      <div className="absolute bottom-0 left-0 right-0 px-2 py-1.5 sm:px-3 sm:py-2 bg-linear-to-t from-black/60 to-transparent">
+        <p className="text-white text-[11px] sm:text-xs font-semibold truncate">{board.title}</p>
       </div>
     </motion.div>
   );
@@ -104,6 +104,17 @@ interface WhiteboardItem {
   updatedAt: string;
 }
 
+interface TeamMember {
+  id: string;
+  userId: string;
+  userName: string;
+  userEmail: string;
+  permission: string;
+  whiteboardId: string;
+  whiteboardTitle: string;
+  createdAt: string;
+}
+
 export default function Dashboard() {
   const router = useRouter();
   const { user, loading, isAuthenticated, logout: contextLogout } = useAuth();
@@ -131,6 +142,10 @@ export default function Dashboard() {
   const [startX, setStartX] = useState(0);
   const [scrollLeft, setScrollLeft] = useState(0);
   const [activeDotIndex, setActiveDotIndex] = useState(0);
+  const [teamMembers, setTeamMembers] = useState<TeamMember[]>([]);
+  const [loadingMembers, setLoadingMembers] = useState(false);
+  const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
+  const [mobileRightSidebarOpen, setMobileRightSidebarOpen] = useState(false);
 
   const updateThumbsScroll = () => {
     const el = thumbsScrollRef.current;
@@ -188,6 +203,12 @@ export default function Dashboard() {
     return Math.ceil(el.scrollWidth / el.clientWidth);
   };
 
+  // Calculate unique member count (same user across multiple boards = 1 member)
+  const uniqueMemberCount = () => {
+    const uniqueUserIds = new Set(teamMembers.map(m => m.userId));
+    return uniqueUserIds.size;
+  };
+
   useEffect(() => {
     try {
       const stored = localStorage.getItem("recent_whiteboards");
@@ -238,6 +259,94 @@ export default function Dashboard() {
     };
     if (isAuthenticated) fetchWhiteboards();
   }, [isAuthenticated]);
+
+  // Fetch all team members across all whiteboards
+  const fetchAllMembers = async () => {
+    if (!isAuthenticated || whiteboards.length === 0) return;
+    setLoadingMembers(true);
+    try {
+      const allMembers: TeamMember[] = [];
+      const memberFetches = whiteboards.map(async (wb) => {
+        try {
+          const res = await apiFetch(`${API_URL}/api/collab-whiteboard/${wb.id}/members`);
+          if (res.ok) {
+            const members = await res.json();
+            return members.map((member: any) => ({
+              ...member,
+              whiteboardId: wb.id,
+              whiteboardTitle: wb.title,
+            }));
+          }
+        } catch { /* ignore */ }
+        return [];
+      });
+      
+      const results = await Promise.all(memberFetches);
+      results.forEach((members) => allMembers.push(...members));
+      
+      // Sort by user email for consistent grouping
+      allMembers.sort((a, b) => a.userEmail.localeCompare(b.userEmail));
+      
+      setTeamMembers(allMembers);
+    } catch { /* ignore */ }
+    finally { setLoadingMembers(false); }
+  };
+
+  // Fetch team members when switching to people view or when whiteboards change
+  useEffect(() => {
+    if (navActive === "people" && whiteboards.length > 0) {
+      fetchAllMembers();
+    }
+  }, [navActive, whiteboards]);
+
+  // Update member permission
+  const handleUpdateMemberPermission = async (whiteboardId: string, memberId: string, newPermission: string) => {
+    try {
+      const res = await apiFetch(
+        `${API_URL}/api/collab-whiteboard/${whiteboardId}/members/${memberId}`,
+        { method: "PUT", body: JSON.stringify({ permission: newPermission }) }
+      );
+      if (res.ok) {
+        // Update local state
+        setTeamMembers((prev) => 
+          prev.map((m) => 
+            m.id === memberId && m.whiteboardId === whiteboardId
+              ? { ...m, permission: newPermission }
+              : m
+          )
+        );
+      }
+    } catch { /* ignore */ }
+  };
+
+  // Remove member from whiteboard
+  const handleRemoveMember = async (whiteboardId: string, memberId: string) => {
+    if (!confirm("Remove this member from the board?")) return;
+    try {
+      const res = await apiFetch(
+        `${API_URL}/api/collab-whiteboard/${whiteboardId}/members/${memberId}`,
+        { method: "DELETE" }
+      );
+      if (res.ok) {
+        setTeamMembers((prev) => 
+          prev.filter((m) => !(m.id === memberId && m.whiteboardId === whiteboardId))
+        );
+      }
+    } catch { /* ignore */ }
+  };
+
+  // Group members by whiteboard
+  const groupedMembers = teamMembers.reduce((acc, member) => {
+    if (!acc[member.whiteboardId]) {
+      acc[member.whiteboardId] = {
+        whiteboardId: member.whiteboardId,
+        whiteboardTitle: member.whiteboardTitle,
+        members: [],
+      };
+    }
+    acc[member.whiteboardId].members.push(member);
+    return acc;
+  }, {} as Record<string, { whiteboardId: string; whiteboardTitle: string; members: TeamMember[] }>);
 
   const handleCreateWhiteboard = async () => {
     setCreating(true);
@@ -389,40 +498,151 @@ export default function Dashboard() {
   return (
     <div className="flex h-screen overflow-hidden transition-colors duration-300" style={{ background: T.bg, color: T.text }}>
 
+      {/* Mobile menu backdrop */}
+      {mobileMenuOpen && (
+        <div 
+          className="fixed inset-0 bg-black/50 z-30 md:hidden"
+          onClick={() => setMobileMenuOpen(false)}
+        />
+      )}
+
+      {/* Mobile right sidebar backdrop */}
+      {mobileRightSidebarOpen && (
+        <div 
+          className="fixed inset-0 bg-black/50 z-30 md:hidden"
+          onClick={() => setMobileRightSidebarOpen(false)}
+        />
+      )}
+
       {/* ─── LEFT SIDEBAR ─────────────────────────────────────────── */}
-      <aside className="w-16 flex flex-col items-center py-5 gap-2 z-20 shrink-0 border-r" style={{ background: T.bgAlt, borderColor: T.borderMuted }}>
-        {/* Logo */}
-        <div className="w-9 h-9 rounded-xl flex items-center justify-center mb-4 shadow-lg shrink-0" style={{ background: A.bg, boxShadow: `0 8px 24px ${A.glow}` }}>
+      <aside 
+        className={`
+          fixed md:static inset-y-0 left-0 z-40
+          w-72 md:w-16 flex flex-col py-5 md:py-5 shrink-0 border-r
+          transform transition-transform duration-300 md:transform-none
+          ${mobileMenuOpen ? 'translate-x-0' : '-translate-x-full md:translate-x-0'}
+        `}
+        style={{ background: T.bgAlt, borderColor: T.borderMuted }}
+      >
+        {/* Mobile: Profile section / Desktop: Logo */}
+        <div className="md:hidden px-5 pb-5 border-b mb-4" style={{ borderColor: T.borderMuted }}>
+          <div className="flex items-center gap-3 mb-3">
+            <div className="w-12 h-12 rounded-full flex items-center justify-center text-white text-sm font-bold shadow-lg shrink-0"
+              style={{ background: `linear-gradient(135deg, ${A.bg}, ${A.bg}99)` }}>
+              {user.name ? initials(user.name) : user.email?.charAt(0).toUpperCase()}
+            </div>
+            <div className="flex-1 min-w-0">
+              <p className="text-sm font-semibold truncate" style={{ color: T.text }}>
+                {user.name || user.email?.split("@")[0]}
+              </p>
+              <p className="text-xs truncate" style={{ color: T.textFaint }}>
+                {user.email}
+              </p>
+            </div>
+            <button
+              onClick={async () => { await contextLogout(); router.push("/login"); setMobileMenuOpen(false); }}
+              className="w-9 h-9 rounded-xl flex items-center justify-center transition-colors shrink-0"
+              style={{ background: A.bg, color: "#ffffff" }}
+              title="Logout"
+            >
+              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1" />
+              </svg>
+            </button>
+          </div>
+        </div>
+
+        {/* Desktop: Logo (icon only) */}
+        <div className="hidden md:flex w-9 h-9 rounded-xl items-center justify-center mb-4 shadow-lg shrink-0 mx-auto" style={{ background: A.bg, boxShadow: `0 8px 24px ${A.glow}` }}>
           <svg className="w-4 h-4 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z" />
           </svg>
         </div>
 
-        {/* Nav icons */}
-        <div className="flex flex-col items-center gap-1 flex-1">
-          {navItems.map(item => (
-            <button
-              key={item.id}
-              onClick={() => setNavActive(item.id as typeof navActive)}
-              title={item.label}
-              className="w-10 h-10 rounded-xl flex items-center justify-center transition-all duration-200 group relative"
-              style={navActive === item.id
-                ? { background: A.bg, color: "#ffffff", boxShadow: `0 8px 16px ${A.glow}` }
-                : { color: T.textFaint }}
-              onMouseEnter={e => { if (navActive !== item.id) { (e.currentTarget as HTMLElement).style.color = T.textMuted; (e.currentTarget as HTMLElement).style.background = T.inputBg; } }}
-              onMouseLeave={e => { if (navActive !== item.id) { (e.currentTarget as HTMLElement).style.color = T.textFaint; (e.currentTarget as HTMLElement).style.background = "transparent"; } }}
-            >
-              {item.icon}
-              <span className="absolute left-full ml-2.5 px-2.5 py-1 text-xs rounded-lg opacity-0 group-hover:opacity-100 pointer-events-none whitespace-nowrap transition-opacity z-50 shadow-xl"
-                style={{ background: T.bgCard, border: `1px solid ${T.border}`, color: T.text }}>
-                {item.label}
-              </span>
-            </button>
-          ))}
+        {/* Mobile: Section header / Desktop: hidden */}
+        <div className="md:hidden px-5 mb-2">
+          <p className="text-xs font-semibold uppercase tracking-wider" style={{ color: T.textFaint }}>Workspace</p>
         </div>
 
-        {/* Bottom icons */}
-        <div className="flex flex-col items-center gap-2 mt-auto">
+        {/* Nav items */}
+        <div className="flex flex-col md:items-center gap-1 flex-1 px-3 md:px-0">
+          {navItems.map(item => {
+            const isActive = navActive === item.id;
+            return (
+              <button
+                key={item.id}
+                onClick={() => { setNavActive(item.id as typeof navActive); setMobileMenuOpen(false); }}
+                title={item.label}
+                className={`
+                  w-full md:w-10 h-12 md:h-10 rounded-xl flex items-center gap-3 md:justify-center
+                  transition-all duration-200 group relative px-4 md:px-0
+                  ${isActive ? 'md:bg-transparent' : 'hover:bg-opacity-50'}
+                `}
+                style={{
+                  // Mobile only: light background with left border
+                  ...(isActive && {
+                    background: A.light,
+                    color: prefs.theme === "light" ? A.bg : A.text,
+                    borderLeft: `3px solid ${A.bg}`,
+                  }),
+                  // Inactive state
+                  ...(!isActive && {
+                    color: T.textFaint,
+                    borderLeft: '3px solid transparent',
+                  })
+                }}
+              >
+                {/* Icon */}
+                <span className={`w-5 h-5 shrink-0 relative z-10 ${isActive ? 'md:text-white' : ''}`}>
+                  {item.icon}
+                </span>
+                
+                {/* Mobile label */}
+                <span className="md:hidden text-sm font-medium">{item.label}</span>
+                
+                {/* Desktop tooltip */}
+                <span className="hidden md:block absolute left-full ml-2.5 px-2.5 py-1 text-xs rounded-lg opacity-0 group-hover:opacity-100 pointer-events-none whitespace-nowrap transition-opacity z-50 shadow-xl"
+                  style={{ background: T.bgCard, border: `1px solid ${T.border}`, color: T.text }}>
+                  {item.label}
+                </span>
+                
+                {/* Desktop active glow effect */}
+                {isActive && (
+                  <span className="hidden md:block absolute inset-0 rounded-xl pointer-events-none" 
+                    style={{ 
+                      background: A.bg,
+                      boxShadow: `0 8px 16px ${A.glow}`,
+                      zIndex: 0,
+                    }} 
+                  />
+                )}
+              </button>
+            );
+          })}
+        </div>
+
+        {/* Mobile: Other section / Desktop: Bottom icons */}
+        <div className="md:hidden px-5 pt-4 border-t" style={{ borderColor: T.borderMuted }}>
+          <p className="text-xs font-semibold uppercase tracking-wider mb-2" style={{ color: T.textFaint }}>Other</p>
+          <div className="space-y-1">
+            <button
+              onClick={() => { router.push("/settings"); setMobileMenuOpen(false); }}
+              className="w-full h-12 rounded-xl flex items-center gap-3 transition-colors px-4"
+              style={{ color: T.textMuted }}
+              onMouseEnter={e => (e.currentTarget as HTMLElement).style.background = T.inputBg}
+              onMouseLeave={e => (e.currentTarget as HTMLElement).style.background = "transparent"}
+            >
+              <svg className="w-5 h-5 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.8} d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" />
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.8} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
+              </svg>
+              <span className="text-sm font-medium">Settings</span>
+            </button>
+          </div>
+        </div>
+
+        {/* Desktop only: Bottom icons */}
+        <div className="hidden md:flex flex-col items-center gap-2 mt-auto">
           <button
             title="Settings"
             onClick={() => router.push("/settings")}
@@ -464,8 +684,40 @@ export default function Dashboard() {
 
       {/* ─── MAIN CONTENT ──────────────────────────────────────────── */}
       <main className="flex-1 flex flex-col min-w-0 overflow-hidden">
+        {/* Mobile header */}
+        <div className="md:hidden h-16 shrink-0 flex items-center justify-between px-5 border-b shadow-sm" style={{ background: T.bgAlt, borderColor: T.borderMuted }}>
+          <button
+            onClick={() => setMobileMenuOpen(!mobileMenuOpen)}
+            className="w-11 h-11 rounded-xl flex items-center justify-center transition-colors"
+            style={{ color: T.text, background: mobileMenuOpen ? T.inputBg : 'transparent' }}
+          >
+            <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              {mobileMenuOpen ? (
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+              ) : (
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 6h16M4 12h16M4 18h16" />
+              )}
+            </svg>
+          </button>
+          <div className="flex items-center gap-2.5">
+            <div className="w-9 h-9 rounded-xl flex items-center justify-center shadow-lg" style={{ background: A.bg, boxShadow: `0 4px 12px ${A.glow}` }}>
+              <svg className="w-5 h-5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z" />
+              </svg>
+            </div>
+            <span className="font-bold text-base" style={{ color: T.text }}>CollabBoard</span>
+          </div>
+          <button
+            onClick={() => setMobileRightSidebarOpen(!mobileRightSidebarOpen)}
+            className="w-11 h-11 rounded-full flex items-center justify-center text-white text-sm font-bold shadow-lg"
+            style={{ background: `linear-gradient(135deg, ${A.bg}, ${A.bg}99)` }}
+          >
+            {user.name ? initials(user.name) : user.email?.charAt(0).toUpperCase()}
+          </button>
+        </div>
+
         {/* Top nav */}
-        <header className="h-14 shrink-0 flex items-center justify-between px-6 border-b" style={{ background: T.bg, borderColor: T.borderMuted }}>
+        <header className="hidden md:flex h-14 shrink-0 items-center justify-between px-6 border-b" style={{ background: T.bg, borderColor: T.borderMuted }}>
           <div className="flex items-center gap-1">
             {[
               { key: "all-boards", label: "All Boards", action: () => { setActiveTab("all"); setNavActive("boards"); } },
@@ -490,25 +742,31 @@ export default function Dashboard() {
           </div>
         </header>
 
-        <div className="flex-1 overflow-y-auto dash-scroll px-6 py-5 space-y-5">
+        <div className="flex-1 overflow-y-auto dash-scroll px-4 md:px-6 py-4 md:py-5 space-y-4 md:space-y-5">
           {/* Section header */}
-          <div className="flex items-end justify-between">
+          <div className="flex flex-col md:flex-row md:items-end justify-between gap-2">
             <div>
-              <h1 className="text-xl font-bold" style={{ color: T.text }}>
-                {navActive === "starred" ? "Starred Boards" : navActive === "recent" ? "Recent Boards" : "Find your boards"}
+              <h1 className="text-lg md:text-xl font-bold" style={{ color: T.text }}>
+                {navActive === "starred" ? "Starred Boards" 
+                  : navActive === "recent" ? "Recent Boards" 
+                  : navActive === "people" ? "Team Members"
+                  : "Find your boards"}
               </h1>
-              <p className="text-sm mt-0.5" style={{ color: T.textMuted }}>
-                {loadingBoards ? "Loading\u2026" : navActive === "starred" 
-                  ? `${starredBoards.length} starred board${starredBoards.length !== 1 ? "s" : ""}` 
-                  : navActive === "recent"
-                    ? `${recentBoards.length} recent board${recentBoards.length !== 1 ? "s" : ""}`
-                    : `${whiteboards.length} board${whiteboards.length !== 1 ? "s" : ""}`
+              <p className="text-xs md:text-sm mt-0.5" style={{ color: T.textMuted }}>
+                {loadingBoards || (navActive === "people" && loadingMembers) ? "Loading\u2026" 
+                  : navActive === "starred" 
+                    ? `${starredBoards.length} starred board${starredBoards.length !== 1 ? "s" : ""}` 
+                    : navActive === "recent"
+                      ? `${recentBoards.length} recent board${recentBoards.length !== 1 ? "s" : ""}`
+                      : navActive === "people"
+                        ? `${uniqueMemberCount()} unique member${uniqueMemberCount() !== 1 ? "s" : ""} across ${whiteboards.length} board${whiteboards.length !== 1 ? "s" : ""}`
+                        : `${whiteboards.length} board${whiteboards.length !== 1 ? "s" : ""}`
                 }
               </p>
             </div>
             {navActive === "boards" && (
               <button
-                className="text-sm font-medium transition-colors hover:underline"
+                className="text-xs md:text-sm font-medium transition-colors hover:underline self-start md:self-auto"
                 style={{ color: prefs.theme === "light" ? A.bg : A.text }}
                 onClick={() => {
                   setActiveTab("all");
@@ -522,12 +780,12 @@ export default function Dashboard() {
 
           {/* Filter pills - only show for boards view */}
           {navActive === "boards" && (
-            <div className="flex items-center gap-2">
+            <div className="flex items-center gap-2 overflow-x-auto pb-1 dash-scroll">
               {(["popular", "latest"] as const).map(f => (
                 <button
                   key={f}
                   onClick={() => setSelectedFilter(f)}
-                  className="px-5 py-2 rounded-xl text-sm font-semibold transition-all duration-200"
+                  className="px-4 md:px-5 py-1.5 md:py-2 rounded-xl text-xs md:text-sm font-semibold transition-all duration-200 whitespace-nowrap shrink-0"
                   style={selectedFilter === f
                     ? { background: T.text, color: T.bg, boxShadow: "0 4px 16px rgba(0,0,0,0.2)" }
                     : { background: T.inputBg, color: T.textMuted, border: `1px solid ${T.border}` }}
@@ -578,8 +836,8 @@ export default function Dashboard() {
 
           {/* Filter + sort row - only show for boards view */}
           {navActive === "boards" && (
-            <div ref={boardsGridRef} className="flex items-center justify-between gap-3 pt-1">
-              <div className="flex items-center gap-2">
+            <div ref={boardsGridRef} className="flex flex-col md:flex-row items-start md:items-center justify-between gap-3 pt-1">
+              <div className="flex items-center gap-2 overflow-x-auto pb-1 dash-scroll w-full md:w-auto">
                 {(["all", "owned", "shared"] as const).map(t => {
                 const counts = { all: whiteboards.length, owned: whiteboards.filter(w => w.permission === "owner").length, shared: whiteboards.filter(w => w.permission !== "owner").length };
                 const labels = { all: "All", owned: "Owned", shared: "Shared" };
@@ -587,7 +845,7 @@ export default function Dashboard() {
                   <button
                     key={t}
                     onClick={() => setActiveTab(t)}
-                    className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-medium border transition-all duration-200"
+                    className="flex items-center gap-1.5 px-2.5 md:px-3 py-1.5 rounded-xl text-xs font-medium border transition-all duration-200 whitespace-nowrap shrink-0"
                     style={activeTab === t
                       ? { background: A.light, borderColor: A.ring, color: prefs.theme === "light" ? A.bg : A.text }
                       : { background: T.inputBg, borderColor: T.border, color: T.textMuted }}
@@ -601,11 +859,11 @@ export default function Dashboard() {
                 );
               })}
             </div>
-            <div className="relative flex items-center gap-2">
-              <span className="text-xs" style={{ color: T.textMuted }}>Sort by:</span>
+            <div className="relative flex items-center gap-2 w-full md:w-auto">
+              <span className="text-xs shrink-0" style={{ color: T.textMuted }}>Sort by:</span>
               <button
                 onClick={() => setSortDropdownOpen(o => !o)}
-                className="flex items-center gap-2 text-xs rounded-xl px-3 py-1.5 border transition-colors cursor-pointer"
+                className="flex items-center gap-2 text-xs rounded-xl px-3 py-1.5 border transition-colors cursor-pointer flex-1 md:flex-initial justify-between"
                 style={{
                   background: sortDropdownOpen ? A.light : T.inputBg,
                   borderColor: sortDropdownOpen ? A.ring : T.border,
@@ -625,7 +883,7 @@ export default function Dashboard() {
                 <>
                   <div className="fixed inset-0 z-10" onClick={() => setSortDropdownOpen(false)} />
                   <div
-                    className="absolute right-0 top-full mt-1.5 z-20 rounded-2xl overflow-hidden"
+                    className="absolute right-0 top-full mt-1.5 z-20 rounded-2xl overflow-hidden w-full md:w-auto"
                     style={{
                       minWidth: 160,
                       background: T.bgCard,
@@ -665,9 +923,160 @@ export default function Dashboard() {
           </div>
           )}
 
-          {/* Board cards */}
+          {/* Board cards OR Team members view */}
           <AnimatePresence mode="wait">
-            {loadingBoards ? (
+            {navActive === "people" ? (
+              // Team Members View
+              loadingMembers ? (
+                <div className="flex items-center justify-center py-16">
+                  <div className="w-7 h-7 border-2 border-violet-900 border-t-violet-500 rounded-full animate-spin" />
+                </div>
+              ) : teamMembers.length === 0 ? (
+                <motion.div
+                  initial={{ opacity: 0 }} animate={{ opacity: 1 }}
+                  className="text-center py-16 rounded-2xl border border-dashed"
+                  style={{ borderColor: T.border }}
+                >
+                  <div className="w-14 h-14 rounded-2xl flex items-center justify-center mx-auto mb-4 border" style={{ background: T.inputBg, borderColor: T.border }}>
+                    <svg className="w-7 h-7" style={{ color: T.textFaint }} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0z" />
+                    </svg>
+                  </div>
+                  <p className="font-semibold" style={{ color: T.textMuted }}>
+                    No team members yet
+                  </p>
+                  <p className="text-sm mt-1" style={{ color: T.textFaint }}>
+                    Invite collaborators to your boards to see them here
+                  </p>
+                </motion.div>
+              ) : (
+                <div className="space-y-4 pb-4">
+                  {Object.values(groupedMembers).map((group) => {
+                    const gradient = getBoardGradient(group.whiteboardId);
+                    return (
+                      <motion.div
+                        key={group.whiteboardId}
+                        initial={{ opacity: 0, y: 10 }}
+                        animate={{ opacity: 1, y: 0 }}
+                        className="rounded-2xl border overflow-hidden"
+                        style={{ background: T.bgCard, borderColor: T.border }}
+                      >
+                        {/* Whiteboard header */}
+                        <div className="flex flex-col sm:flex-row items-start sm:items-center gap-3 p-3 md:p-4 border-b" style={{ borderColor: T.border }}>
+                          <div className="flex items-center gap-3 flex-1 min-w-0 w-full sm:w-auto">
+                            <div
+                              className={`w-10 h-10 md:w-12 md:h-12 rounded-xl bg-gradient-to-br ${gradient} flex items-center justify-center shrink-0 shadow-md`}
+                            >
+                              <span className="text-white text-xs md:text-sm font-black">
+                                {group.whiteboardTitle.slice(0, 2).toUpperCase()}
+                              </span>
+                            </div>
+                            <div className="flex-1 min-w-0">
+                              <h3 className="text-sm md:text-base font-bold truncate" style={{ color: T.text }}>
+                                {group.whiteboardTitle}
+                              </h3>
+                              <p className="text-[11px] md:text-xs mt-0.5" style={{ color: T.textMuted }}>
+                                {group.members.length} member{group.members.length !== 1 ? "s" : ""} in collaboration
+                              </p>
+                            </div>
+                          </div>
+                          <button
+                            onClick={() => {
+                              const wb = whiteboards.find(w => w.id === group.whiteboardId);
+                              if (wb) setManagingWhiteboard(wb);
+                            }}
+                            className="px-3 py-1.5 rounded-lg text-xs font-medium transition-colors w-full sm:w-auto"
+                            style={{ background: T.inputBg, color: T.textMuted, border: `1px solid ${T.border}` }}
+                            onMouseEnter={e => (e.currentTarget as HTMLElement).style.background = A.light}
+                            onMouseLeave={e => (e.currentTarget as HTMLElement).style.background = T.inputBg}
+                          >
+                            Manage
+                          </button>
+                        </div>
+
+                        {/* Members list */}
+                        <div className="divide-y" style={{ borderColor: T.border }}>
+                          {group.members.map((member) => {
+                            const initials = member.userName
+                              ? member.userName.split(" ").map(n => n[0]).join("").slice(0, 2).toUpperCase()
+                              : member.userEmail.charAt(0).toUpperCase();
+                            const isOwner = member.permission === "owner";
+
+                            return (
+                              <div
+                                key={member.id}
+                                className="flex flex-col sm:flex-row items-start sm:items-center gap-2 sm:gap-3 p-3 md:p-3.5 transition-colors"
+                                style={{ background: "transparent" }}
+                                onMouseEnter={e => (e.currentTarget as HTMLElement).style.background = T.inputBg}
+                                onMouseLeave={e => (e.currentTarget as HTMLElement).style.background = "transparent"}
+                              >
+                                {/* Avatar and info row */}
+                                <div className="flex items-center gap-2 sm:gap-3 flex-1 min-w-0 w-full sm:w-auto">
+                                  <div
+                                    className="w-8 h-8 sm:w-9 sm:h-9 rounded-full flex items-center justify-center text-white font-bold text-xs shrink-0"
+                                    style={{ background: `linear-gradient(135deg, ${A.bg}, ${A.bg}dd)` }}
+                                  >
+                                    {initials}
+                                  </div>
+
+                                  {/* User info */}
+                                  <div className="flex-1 min-w-0">
+                                    <p className="text-xs md:text-sm font-semibold truncate" style={{ color: T.text }}>
+                                      {member.userName || member.userEmail.split("@")[0]}
+                                    </p>
+                                    <p className="text-[11px] md:text-xs truncate" style={{ color: T.textMuted }}>
+                                      {member.userEmail}
+                                    </p>
+                                  </div>
+                                </div>
+
+                                {/* Permission dropdown and remove button */}
+                                <div className="flex items-center gap-2 w-full sm:w-auto">
+                                  <select
+                                    value={member.permission}
+                                    onChange={(e) => handleUpdateMemberPermission(group.whiteboardId, member.id, e.target.value)}
+                                    disabled={isOwner}
+                                    className="px-2.5 py-1.5 rounded-lg text-xs font-medium border transition-colors disabled:opacity-50 disabled:cursor-not-allowed outline-none flex-1 sm:flex-initial"
+                                  style={{
+                                    background: isOwner ? A.light : T.inputBg,
+                                    borderColor: isOwner ? A.ring : T.border,
+                                    color: isOwner ? (prefs.theme === "light" ? A.bg : A.text) : T.text,
+                                  }}
+                                >
+                                  <option value="owner" className="bg-gray-800" disabled={!isOwner}>
+                                    Owner
+                                  </option>
+                                  <option value="edit" className="bg-gray-800">
+                                    Can Edit
+                                  </option>
+                                  <option value="view" className="bg-gray-800">
+                                    Can View
+                                  </option>
+                                </select>
+
+                                {/* Remove button (not for owner) */}
+                                {!isOwner && (
+                                  <button
+                                    onClick={() => handleRemoveMember(group.whiteboardId, member.id)}
+                                    className="p-1.5 rounded-lg transition-colors text-gray-500 hover:text-red-500 hover:bg-red-500/10 shrink-0"
+                                    title="Remove member"
+                                  >
+                                    <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                                    </svg>
+                                  </button>
+                                )}
+                              </div>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      </motion.div>
+                    );
+                  })}
+                </div>
+              )
+            ) : loadingBoards ? (
               <div className="flex items-center justify-center py-16">
                 <div className="w-7 h-7 border-2 border-violet-900 border-t-violet-500 rounded-full animate-spin" />
               </div>
@@ -758,7 +1167,7 @@ export default function Dashboard() {
                 ))}
               </div>
             ) : prefs.boardLayout === "compact" ? (
-              <div className="grid grid-cols-2 sm:grid-cols-3 gap-2 pb-4">
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2 pb-4">
                 {displayedBoards.map((wb, i) => (
                   <motion.div
                     key={wb.id}
@@ -787,7 +1196,7 @@ export default function Dashboard() {
                 ))}
               </div>
             ) : (
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pb-4">
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-2 xl:grid-cols-3 gap-3 pb-4">
                 {displayedBoards.map((wb, i) => (
                   <motion.div
                     key={wb.id}
@@ -902,7 +1311,28 @@ export default function Dashboard() {
       </main>
 
       {/* ─── RIGHT PANEL ─────────────────────────────────────────── */}
-      <aside className="w-[270px] shrink-0 border-l flex flex-col overflow-y-auto dash-scroll" style={{ background: T.bgAlt, borderColor: T.borderMuted }}>
+      <aside 
+        className={`
+          fixed md:static inset-y-0 right-0 z-40 w-[280px] md:w-[270px] shrink-0 border-l flex flex-col overflow-y-auto dash-scroll
+          transform transition-transform duration-300 md:transform-none
+          ${mobileRightSidebarOpen ? 'translate-x-0' : 'translate-x-full md:translate-x-0'}
+        `}
+        style={{ background: T.bgAlt, borderColor: T.borderMuted }}
+      >
+        {/* Mobile close button */}
+        <div className="md:hidden flex items-center justify-between p-4 border-b" style={{ borderColor: T.borderMuted }}>
+          <span className="text-sm font-semibold" style={{ color: T.text }}>Workspace</span>
+          <button
+            onClick={() => setMobileRightSidebarOpen(false)}
+            className="w-8 h-8 rounded-lg flex items-center justify-center transition-colors"
+            style={{ color: T.text, background: T.inputBg }}
+          >
+            <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+            </svg>
+          </button>
+        </div>
+
         {/* Stats gauge */}
         <div className="p-5 border-b" style={{ borderColor: T.borderMuted }}>
           <div className="flex items-center justify-between mb-1">
@@ -914,15 +1344,9 @@ export default function Dashboard() {
                 <circle cx="60" cy="60" r="50" fill="none" stroke={T.inputBg} strokeWidth="10" />
                 <circle
                   cx="60" cy="60" r="50" fill="none"
-                  stroke="url(#ggrad)" strokeWidth="10" strokeLinecap="round"
+                  stroke={A.bg} strokeWidth="10" strokeLinecap="round"
                   strokeDasharray={`${Math.min((whiteboards.length / Math.max(whiteboards.length + 4, 8)) * 314, 290)} 314`}
                 />
-                <defs>
-                  <linearGradient id="ggrad" x1="0%" y1="0%" x2="100%" y2="0%">
-                    <stop offset="0%" stopColor="#7c3aed" />
-                    <stop offset="100%" stopColor="#c026d3" />
-                  </linearGradient>
-                </defs>
               </svg>
               <div className="absolute inset-0 flex flex-col items-center justify-center">
                 <span className="text-3xl font-black leading-none" style={{ color: T.text }}>{whiteboards.length}</span>

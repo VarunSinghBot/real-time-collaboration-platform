@@ -75,11 +75,11 @@ export default function Home() {
 
       {/* Glow blobs */}
       <div className="pointer-events-none fixed inset-0 overflow-hidden">
-        <div className="absolute -top-32 left-1/3 w-[600px] h-[600px] rounded-full opacity-30"
+        <div className="absolute -top-32 left-1/3 w-150 h-150 rounded-full opacity-30"
           style={{ background: "radial-gradient(circle, rgba(124,58,237,0.25) 0%, transparent 70%)" }} />
-        <div className="absolute top-2/3 right-0 w-[400px] h-[400px] rounded-full opacity-20"
+        <div className="absolute top-2/3 right-0 w-100 h-100 rounded-full opacity-20"
           style={{ background: "radial-gradient(circle, rgba(217,70,239,0.2) 0%, transparent 70%)" }} />
-        <div className="absolute bottom-0 left-0 w-[350px] h-[350px] rounded-full opacity-15"
+        <div className="absolute bottom-0 left-0 w-87.5 h-87.5 rounded-full opacity-15"
           style={{ background: "radial-gradient(circle, rgba(59,130,246,0.2) 0%, transparent 70%)" }} />
       </div>
 
@@ -102,6 +102,12 @@ export default function Home() {
             <span className="text-sm font-bold text-white tracking-tight">CollabBoard</span>
           </div>
           <div className="flex items-center gap-2">
+            <Link href="/pricing">
+              <motion.span whileHover={{ scale: 1.03 }} whileTap={{ scale: 0.97 }}
+                className="inline-flex px-4 py-2 text-sm text-zinc-400 hover:text-white font-medium transition-colors cursor-pointer">
+                Pricing
+              </motion.span>
+            </Link>
             <Link href="/login">
               <motion.span whileHover={{ scale: 1.03 }} whileTap={{ scale: 0.97 }}
                 className="inline-flex px-4 py-2 text-sm text-zinc-400 hover:text-white font-medium transition-colors cursor-pointer">
@@ -277,7 +283,7 @@ export default function Home() {
                 whileHover={{ y: -4, transition: { duration: 0.16 } }}
                 className="group relative rounded-2xl p-6 overflow-hidden"
                 style={{ background: "rgba(255,255,255,0.03)", border: "1px solid rgba(255,255,255,0.07)" }}>
-                <div className={`w-10 h-10 rounded-xl bg-gradient-to-br ${f.gradient} flex items-center justify-center text-white mb-4 shadow-lg`}>
+                <div className={`w-10 h-10 rounded-xl bg-linear-to-br ${f.gradient} flex items-center justify-center text-white mb-4 shadow-lg`}>
                   {f.icon}
                 </div>
                 <h3 className="font-bold text-white text-base mb-2">{f.title}</h3>
