@@ -58,6 +58,9 @@ func ConnectDB() {
 		&models.User{},
 		&models.OAuthProvider{},
 		&models.RefreshToken{},
+		&models.WhiteboardData{},
+		&models.CollabWhiteboard{},
+		&models.WhiteboardMember{},
 	)
 	if err != nil {
 		log.Fatal("Failed to migrate database:", err)
@@ -71,7 +74,7 @@ func ConnectDB() {
 	}
 	DB.Raw("SELECT version()").Scan(&result)
 	fmt.Printf("📊 Database: PostgreSQL\n")
-	fmt.Printf("📦 Tables: users, oauth_providers, refresh_tokens\n")
+	fmt.Printf("📦 Tables: users, oauth_providers, refresh_tokens, whiteboard_data, collab_whiteboards, whiteboard_members\n")
 }
 
 func DisconnectDB() {

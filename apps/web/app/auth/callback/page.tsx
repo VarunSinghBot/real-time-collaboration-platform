@@ -4,6 +4,159 @@ import { useEffect, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useAuthService } from "@/lib/auth";
 
+const PenIcon = () => (
+  <svg className="w-5 h-5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5}
+      d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z" />
+  </svg>
+);
+
+function LoadingScreen() {
+  const steps = ["Verifying identity", "Securing session", "Loading your workspace"];
+  const [step, setStep] = useState(0);
+
+  useEffect(() => {
+    const t1 = setTimeout(() => setStep(1), 800);
+    const t2 = setTimeout(() => setStep(2), 1800);
+    return () => { clearTimeout(t1); clearTimeout(t2); };
+  }, []);
+
+  return (
+    <div className="min-h-screen flex items-center justify-center relative overflow-hidden" style={{ background: "#0f0f1a" }}>
+      {/* Grid */}
+      <div className="absolute inset-0 pointer-events-none" style={{
+        backgroundImage: "linear-gradient(rgba(139,92,246,0.045) 1px,transparent 1px),linear-gradient(90deg,rgba(139,92,246,0.045) 1px,transparent 1px)",
+        backgroundSize: "48px 48px",
+      }} />
+
+      {/* Ambient glow blobs */}
+      <div className="absolute pointer-events-none" style={{
+        top: "20%", left: "50%", transform: "translate(-50%,-50%)",
+        width: 520, height: 520, borderRadius: "50%",
+        background: "radial-gradient(circle, rgba(124,58,237,0.13) 0%, transparent 70%)",
+        filter: "blur(48px)",
+      }} />
+      <div className="absolute pointer-events-none" style={{
+        bottom: "15%", right: "20%",
+        width: 320, height: 320, borderRadius: "50%",
+        background: "radial-gradient(circle, rgba(217,70,239,0.08) 0%, transparent 70%)",
+        filter: "blur(40px)",
+      }} />
+
+      {/* Card */}
+      <div className="relative flex flex-col items-center text-center px-12 py-12 rounded-3xl w-full max-w-sm mx-4" style={{
+        background: "linear-gradient(135deg, rgba(139,92,246,0.07) 0%, rgba(15,15,26,0.6) 50%, rgba(88,28,235,0.05) 100%)",
+        backdropFilter: "blur(32px) saturate(160%)",
+        WebkitBackdropFilter: "blur(32px) saturate(160%)",
+        border: "1px solid rgba(139,92,246,0.18)",
+        boxShadow: "0 0 0 1px rgba(255,255,255,0.03) inset, 0 24px 64px rgba(0,0,0,0.5)",
+      }}>
+        {/* Top shimmer line */}
+        <div className="absolute top-0 left-8 right-8 h-px rounded-full" style={{
+          background: "linear-gradient(90deg, transparent, rgba(167,139,250,0.6), rgba(217,70,239,0.4), transparent)",
+        }} />
+
+        {/* Logo */}
+        <div className="mb-8 flex flex-col items-center gap-3">
+          <div className="w-12 h-12 rounded-2xl flex items-center justify-center" style={{
+            background: "linear-gradient(135deg, #7c3aed, #6d28d9)",
+            boxShadow: "0 0 24px rgba(124,58,237,0.5), 0 0 48px rgba(124,58,237,0.2)",
+          }}>
+            <PenIcon />
+          </div>
+          <span className="text-sm font-bold tracking-tight" style={{
+            background: "linear-gradient(135deg, #a78bfa, #f0abfc)",
+            WebkitBackgroundClip: "text", WebkitTextFillColor: "transparent", backgroundClip: "text",
+          }}>CollabBoard</span>
+        </div>
+
+        {/* Spinner */}
+        <div className="relative w-16 h-16 mb-8">
+          {/* Static track */}
+          <div className="absolute inset-0 rounded-full" style={{ border: "2px solid rgba(139,92,246,0.15)" }} />
+          {/* Outer spinning arc */}
+          <div className="absolute inset-0 rounded-full animate-spin" style={{
+            border: "2px solid transparent",
+            borderTopColor: "#8b5cf6",
+            borderRightColor: "rgba(139,92,246,0.3)",
+            animationDuration: "1s",
+          }} />
+          {/* Inner reverse arc */}
+          <div className="absolute inset-1.5 rounded-full animate-spin" style={{
+            border: "2px solid transparent",
+            borderTopColor: "#d946ef",
+            animationDuration: "0.75s",
+            animationDirection: "reverse",
+          }} />
+          {/* Center dot */}
+          <div className="absolute inset-0 flex items-center justify-center">
+            <div className="w-2 h-2 rounded-full" style={{ background: "#8b5cf6", boxShadow: "0 0 8px #8b5cf6" }} />
+          </div>
+        </div>
+
+        {/* Heading */}
+        <h1 className="text-xl font-bold text-white mb-1 tracking-tight">Signing you in</h1>
+        <p className="text-sm text-zinc-400 mb-8">One moment while we set up your session</p>
+
+        {/* Step indicators */}
+        <div className="w-full flex flex-col gap-2.5">
+          {steps.map((s, i) => (
+            <div key={s} className="flex items-center gap-3 text-left" style={{ opacity: i <= step ? 1 : 0.3, transition: "opacity 0.4s ease" }}>
+              <div className="w-4 h-4 rounded-full flex items-center justify-center shrink-0" style={{
+                background: i < step ? "rgba(52,211,153,0.15)" : i === step ? "rgba(139,92,246,0.2)" : "rgba(255,255,255,0.05)",
+                border: i < step ? "1px solid rgba(52,211,153,0.35)" : i === step ? "1px solid rgba(139,92,246,0.4)" : "1px solid rgba(255,255,255,0.08)",
+                transition: "all 0.4s ease",
+              }}>
+                {i < step ? (
+                  <svg className="w-2.5 h-2.5 text-emerald-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={3} d="M5 13l4 4L19 7" />
+                  </svg>
+                ) : i === step ? (
+                  <div className="w-1.5 h-1.5 rounded-full bg-violet-400 animate-pulse" />
+                ) : null}
+              </div>
+              <span className="text-xs font-medium" style={{ color: i < step ? "#6ee7b7" : i === step ? "#c4b5fd" : "#71717a" }}>
+                {s}
+              </span>
+            </div>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function ErrorScreen({ message }: { message: string }) {
+  return (
+    <div className="min-h-screen flex items-center justify-center relative overflow-hidden" style={{ background: "#0f0f1a" }}>
+      <div className="absolute inset-0 pointer-events-none" style={{
+        backgroundImage: "linear-gradient(rgba(139,92,246,0.045) 1px,transparent 1px),linear-gradient(90deg,rgba(139,92,246,0.045) 1px,transparent 1px)",
+        backgroundSize: "48px 48px",
+      }} />
+      <div className="relative flex flex-col items-center text-center px-10 py-10 rounded-3xl w-full max-w-sm mx-4" style={{
+        background: "rgba(239,68,68,0.04)",
+        backdropFilter: "blur(24px)",
+        WebkitBackdropFilter: "blur(24px)",
+        border: "1px solid rgba(239,68,68,0.18)",
+        boxShadow: "0 24px 64px rgba(0,0,0,0.5)",
+      }}>
+        <div className="absolute top-0 left-8 right-8 h-px rounded-full" style={{
+          background: "linear-gradient(90deg, transparent, rgba(239,68,68,0.5), transparent)",
+        }} />
+        <div className="w-12 h-12 rounded-2xl flex items-center justify-center mb-5 text-xl" style={{
+          background: "rgba(239,68,68,0.1)", border: "1px solid rgba(239,68,68,0.2)",
+        }}>⚠️</div>
+        <h1 className="text-lg font-bold text-white mb-2">Authentication failed</h1>
+        <p className="text-sm text-zinc-400 mb-6">{message}</p>
+        <div className="flex items-center gap-2 text-zinc-500 text-xs">
+          <div className="w-3 h-3 border border-zinc-600 border-t-zinc-400 rounded-full animate-spin" />
+          Redirecting to login...
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export default function OAuthCallbackPage() {
   const router = useRouter();
   const searchParams = useSearchParams();
@@ -22,19 +175,19 @@ export default function OAuthCallbackPage() {
           return;
         }
 
-        // Store tokens directly in localStorage
         if (typeof window !== "undefined") {
-          localStorage.setItem("auth_tokens", JSON.stringify({
+          authService.storeOAuthSession({
             accessToken,
             refreshToken,
-            expiresIn: parseInt(expiresIn, 10)
-          }));
+            expiresIn: parseInt(expiresIn, 10),
+          });
 
-          // Fetch and store user info
-          const user = await authService.getCurrentUser();
-          localStorage.setItem("auth_user", JSON.stringify(user));
+          try {
+            await authService.getCurrentUser();
+          } catch {
+            // non-fatal — proceed to dashboard anyway
+          }
 
-          // Do a full page redirect to reinitialize auth state
           window.location.href = "/dashboard";
         }
       } catch (err: any) {
@@ -46,59 +199,6 @@ export default function OAuthCallbackPage() {
     handleCallback();
   }, [searchParams, authService, router]);
 
-  if (error) {
-    return (
-      <div className="min-h-screen flex items-center justify-center bg-black/96 relative overflow-hidden">
-        {/* Background effects */}
-        <div className="absolute inset-0 bg-[radial-gradient(#6b21a8_1px,transparent_1px)] bg-size-[16px_16px] opacity-20" />
-        
-        <div className="relative bg-gradient-to-br from-red-900/20 to-red-950/40 backdrop-blur-xl border border-red-500/30 p-10 rounded-2xl shadow-2xl max-w-md text-center">
-          <div className="text-red-400 text-6xl mb-6 animate-pulse">⚠️</div>
-          <h1 className="text-3xl font-bold text-white mb-3">Oops! Something Went Wrong</h1>
-          <p className="text-red-200 mb-6 text-lg">{error}</p>
-          <div className="flex items-center justify-center gap-2 text-gray-400">
-            <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-gray-400"></div>
-            <p className="text-sm">Taking you back to login...</p>
-          </div>
-        </div>
-      </div>
-    );
-  }
-
-  return (
-    <div className="min-h-screen flex items-center justify-center bg-black/96 relative overflow-hidden">
-      {/* Background effects */}
-      <div className="absolute inset-0 bg-[radial-gradient(#6b21a8_1px,transparent_1px)] bg-size-[16px_16px] opacity-20" />
-      
-      {/* Animated gradient orbs */}
-      <div className="absolute top-1/4 left-1/4 w-96 h-96 bg-purple-600/30 rounded-full blur-3xl animate-pulse"></div>
-      <div className="absolute bottom-1/4 right-1/4 w-96 h-96 bg-pink-600/20 rounded-full blur-3xl animate-pulse" style={{ animationDelay: '1s' }}></div>
-      
-      <div className="relative bg-gradient-to-br from-purple-900/20 to-purple-950/40 backdrop-blur-xl border border-purple-500/30 p-12 rounded-2xl shadow-2xl max-w-md text-center">
-        {/* Custom animated loader */}
-        <div className="relative mb-8">
-          <div className="w-20 h-20 mx-auto">
-            <div className="absolute inset-0 rounded-full border-4 border-purple-500/30"></div>
-            <div className="absolute inset-0 rounded-full border-4 border-transparent border-t-purple-500 animate-spin"></div>
-            <div className="absolute inset-2 rounded-full border-4 border-transparent border-t-pink-500 animate-spin" style={{ animationDuration: '1.5s', animationDirection: 'reverse' }}></div>
-            <div className="absolute inset-0 flex items-center justify-center">
-              <span className="text-3xl">🔐</span>
-            </div>
-          </div>
-        </div>
-        
-        <h1 className="text-3xl font-bold bg-clip-text text-transparent bg-linear-to-r from-purple-200 to-pink-200 mb-3">
-          Almost There!
-        </h1>
-        <p className="text-gray-300 text-lg mb-4">Securing your session...</p>
-        
-        {/* Progress dots */}
-        <div className="flex justify-center gap-2">
-          <div className="w-2 h-2 bg-purple-500 rounded-full animate-bounce"></div>
-          <div className="w-2 h-2 bg-purple-500 rounded-full animate-bounce" style={{ animationDelay: '0.1s' }}></div>
-          <div className="w-2 h-2 bg-purple-500 rounded-full animate-bounce" style={{ animationDelay: '0.2s' }}></div>
-        </div>
-      </div>
-    </div>
-  );
+  if (error) return <ErrorScreen message={error} />;
+  return <LoadingScreen />;
 }

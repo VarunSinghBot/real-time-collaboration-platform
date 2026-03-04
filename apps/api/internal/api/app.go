@@ -3,6 +3,7 @@ package api
 import (
 	"collab-platform/api/internal/api/models"
 	"collab-platform/api/internal/api/routes"
+	ws "collab-platform/api/websocket"
 	"context"
 	"encoding/json"
 	"net/http"
@@ -62,10 +63,19 @@ func SetupRouter() http.Handler {
 		})
 	})
 
+	// WebSocket route (outside /api to avoid JSON middleware)
+	r.Get("/ws/collab/{roomId}", ws.HandleCollabWS)
+
 	// API routes
 	r.Route("/api", func(r chi.Router) {
 		// Auth routes
 		routes.SetupAuthRoutes(r)
+
+		// Private whiteboard routes
+		routes.SetupWhiteboardRoutes(r)
+
+		// Collaborative whiteboard routes
+		routes.SetupCollabWhiteboardRoutes(r)
 
 		// Example route: list users
 		r.Route("/v1/users", func(r chi.Router) {

@@ -139,8 +139,17 @@ func getIP(r *http.Request) string {
 
 // Specific rate limiters
 var (
-	// 5 requests per 15 minutes for auth endpoints
+	// 5 requests per 15 minutes for login/signup (brute-force protection)
 	AuthRateLimiter = NewRateLimiter(5, 15*time.Minute)
+
+	// 60 requests per 15 minutes for token refresh.
+	// Access tokens expire every 15 min so the client legitimately fires one
+	// refresh per expiry.  60 gives ~4x headroom for retries without enabling
+	// meaningful brute-force abuse of a cryptographically random refresh token.
+	RefreshRateLimiter = NewRateLimiter(60, 15*time.Minute)
+
+	// 30 requests per 15 minutes for logout (user-or-client-initiated).
+	LogoutRateLimiter = NewRateLimiter(30, 15*time.Minute)
 
 	// 100 requests per minute for general API endpoints
 	APIRateLimiter = NewRateLimiter(100, 1*time.Minute)

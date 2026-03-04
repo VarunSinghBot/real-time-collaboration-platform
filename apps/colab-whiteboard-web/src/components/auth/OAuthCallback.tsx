@@ -10,31 +10,61 @@ export default function OAuthCallbackPage() {
   useEffect(() => {
     const handleCallback = async () => {
       try {
+        console.log("🔐 [OAuthCallback] Starting OAuth callback processing...");
         const accessToken = searchParams.get("accessToken");
         const refreshToken = searchParams.get("refreshToken");
         const expiresIn = searchParams.get("expiresIn");
 
+        console.log("🔍 [OAuthCallback] Tokens received:", {
+          hasAccessToken: !!accessToken,
+          hasRefreshToken: !!refreshToken,
+          expiresIn,
+          accessTokenPrefix: accessToken?.substring(0, 20) + "..."
+        });
+
         if (!accessToken || !refreshToken || !expiresIn) {
+          console.error("❌ [OAuthCallback] Missing tokens in URL");
           setError("Invalid OAuth callback");
           return;
         }
 
-        // Store tokens directly in localStorage
+        // Store tokens properly with issuedAt timestamp
         if (typeof window !== "undefined") {
-          localStorage.setItem("auth_tokens", JSON.stringify({
+          const tokens = {
             accessToken,
             refreshToken,
-            expiresIn: parseInt(expiresIn, 10)
-          }));
+            expiresIn: parseInt(expiresIn, 10),
+            issuedAt: Date.now() // Critical: needed for token refresh scheduling
+          };
+          console.log("💾 [OAuthCallback] Storing tokens:", {
+            expiresIn: tokens.expiresIn,
+            issuedAt: new Date(tokens.issuedAt).toISOString()
+          });
+          localStorage.setItem("auth_tokens", JSON.stringify(tokens));
+          console.log("✅ [OAuthCallback] Tokens stored in localStorage");
+
+          // Initialize auth service to schedule token refresh
+          console.log("🔄 [OAuthCallback] Initializing auth service...");
+          authService.initialize();
+          console.log("✅ [OAuthCallback] Auth service initialized");
 
           // Fetch and store user info
-          const user = await authService.getCurrentUser();
-          localStorage.setItem("auth_user", JSON.stringify(user));
+          try {
+            console.log("📡 [OAuthCallback] Fetching user info...");
+            const user = await authService.getCurrentUser();
+            localStorage.setItem("auth_user", JSON.stringify(user));
+            console.log("✅ [OAuthCallback] User info stored:", user);
+          } catch (userErr) {
+            console.error("❌ [OAuthCallback] Failed to fetch user:", userErr);
+            // Continue anyway - user will be fetched by AuthProvider
+          }
 
           // Do a full page redirect to reinitialize auth state
+          console.log("🚀 [OAuthCallback] Redirecting to /whiteboard");
           window.location.href = "/whiteboard";
         }
       } catch (err: any) {
+        console.error("❌ [OAuthCallback] Exception:", err);
         setError(err.message || "OAuth authentication failed");
         setTimeout(() => navigate("/login"), 3000);
       }

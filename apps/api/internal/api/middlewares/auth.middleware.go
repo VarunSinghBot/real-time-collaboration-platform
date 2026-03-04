@@ -50,8 +50,10 @@ func AuthMiddleware(next http.Handler) http.Handler {
 			return
 		}
 
-		// Add claims to request context
+		// Add claims to request context under the typed key (for GetUserFromContext)
+		// AND under the plain string key "userID" that all controllers read directly.
 		ctx := context.WithValue(r.Context(), UserContextKey, claims)
+		ctx = context.WithValue(ctx, "userID", claims.UserID)
 		next.ServeHTTP(w, r.WithContext(ctx))
 	})
 }

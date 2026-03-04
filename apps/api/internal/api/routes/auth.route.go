@@ -12,16 +12,24 @@ func SetupAuthRoutes(r chi.Router) {
 		// CSRF token endpoint (public, no rate limit)
 		r.Get("/csrf-token", middlewares.GetCSRFToken)
 
-		// Public auth routes with rate limiting
+		// Login / signup — strict rate limit (brute-force protection)
 		r.Group(func(r chi.Router) {
 			r.Use(middlewares.RateLimitMiddleware(middlewares.AuthRateLimiter))
-
-			// Traditional email/password auth
 			r.Post("/signup", controllers.Signup)
 			r.Post("/login", controllers.Login)
+		})
 
-			// Token management
+		// Token refresh — generous limit; this is an automated client call
+		// fired once per access-token lifetime (~15 min).  Keeping it in the
+		// same tight bucket as login caused 429s in normal usage.
+		r.Group(func(r chi.Router) {
+			r.Use(middlewares.RateLimitMiddleware(middlewares.RefreshRateLimiter))
 			r.Post("/refresh", controllers.RefreshAccessToken)
+		})
+
+		// Logout — also client-initiated but less frequent; moderate limit
+		r.Group(func(r chi.Router) {
+			r.Use(middlewares.RateLimitMiddleware(middlewares.LogoutRateLimiter))
 			r.Post("/logout", controllers.RevokeRefreshToken)
 		})
 
