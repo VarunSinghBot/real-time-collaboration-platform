@@ -2,6 +2,7 @@ package controllers
 
 import (
 	"collab-platform/api/internal/api/models"
+	"collab-platform/api/websocket"
 	"encoding/json"
 	"net/http"
 	"strings"
@@ -314,6 +315,8 @@ func DeleteCollabWhiteboard(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	userEmail, _ := r.Context().Value("email").(string)
+
 	whiteboardID := chi.URLParam(r, "id")
 
 	var wb models.CollabWhiteboard
@@ -321,6 +324,17 @@ func DeleteCollabWhiteboard(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, `{"error": "Whiteboard not found or access denied"}`, http.StatusNotFound)
 		return
 	}
+
+	// Broadcast deletion notification to all connected users via WebSocket
+	msg := map[string]interface{}{
+		"type": "deleted",
+		"payload": map[string]string{
+			"deletedBy": userEmail,
+			"message":   "This whiteboard has been deleted by the owner.",
+		},
+	}
+	msgBytes, _ := json.Marshal(msg)
+	websocket.GetManager().BroadcastToAll(whiteboardID, msgBytes)
 
 	// Delete all members first
 	db.Where("whiteboard_id = ?", whiteboardID).Delete(&models.WhiteboardMember{})

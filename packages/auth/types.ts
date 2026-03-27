@@ -33,6 +33,7 @@ export interface LoginRequest {
 export interface OAuthCallbackRequest {
   code: string;
   state: string;
+  redirectUri?: string; // Optional: frontend can provide its own redirect_uri
 }
 
 export interface RefreshTokenRequest {

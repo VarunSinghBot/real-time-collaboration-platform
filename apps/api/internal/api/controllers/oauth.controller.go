@@ -18,8 +18,9 @@ import (
 )
 
 type OAuthCallbackRequest struct {
-	Code  string `json:"code"`
-	State string `json:"state"`
+	Code        string `json:"code"`
+	State       string `json:"state"`
+	RedirectURI string `json:"redirectUri"` // Optional: frontend can provide its own redirect_uri
 }
 
 type GoogleUserInfo struct {
@@ -49,19 +50,35 @@ func GoogleOAuthCallback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Get code and state from query parameters (Google redirects with GET request)
-	code := r.URL.Query().Get("code")
-	// state → _ (for future CSRF validation)
-	_ = r.URL.Query().Get("state")
+	var code, state, redirectURI string
+
+	// Handle both GET (direct Google redirect) and POST (frontend JSON request)
+	if r.Method == http.MethodPost {
+		// POST request - expect JSON body
+		var reqBody OAuthCallbackRequest
+		if err := json.NewDecoder(r.Body).Decode(&reqBody); err != nil {
+			http.Error(w, `{"error": "Invalid request body"}`, http.StatusBadRequest)
+			return
+		}
+		code = reqBody.Code
+		state = reqBody.State
+		redirectURI = reqBody.RedirectURI // Frontend can optionally provide its own redirect_uri
+	} else {
+		// GET request - get from query parameters (Google redirects with GET request)
+		code = r.URL.Query().Get("code")
+		state = r.URL.Query().Get("state")
+	}
+
 	// fmt.Printf("Received OAuth callback with code: %s and state: %s\n", code, state)
+	_ = state // state for future CSRF validation
 
 	if code == "" {
 		http.Error(w, `{"error": "Authorization code is required"}`, http.StatusBadRequest)
 		return
 	}
 
-	// Exchange code for tokens
-	googleTokens, err := exchangeGoogleCode(code)
+	// Exchange code for tokens (use provided redirectURI or default)
+	googleTokens, err := exchangeGoogleCode(code, redirectURI)
 	if err != nil {
 		http.Error(w, `{"error": "Failed to exchange authorization code"}`, http.StatusBadRequest)
 		return
@@ -104,27 +121,43 @@ func GoogleOAuthCallback(w http.ResponseWriter, r *http.Request) {
 	// Clean up old refresh tokens for this user (keep only the last 5)
 	cleanupOldRefreshTokens(db, user.ID, 5)
 
-	// Redirect to frontend with tokens in URL
-	// Use first CORS origin for redirect (the web app)
-	frontendURL := os.Getenv("CORS_ORIGIN")
-	if frontendURL == "" {
-		frontendURL = "http://localhost:3000"
+	// Handle response based on request method
+	if r.Method == http.MethodPost {
+		// POST request - return JSON response
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"accessToken":  tokenPair.AccessToken,
+			"refreshToken": tokenPair.RefreshToken,
+			"expiresIn":    tokenPair.ExpiresIn,
+			"user": map[string]interface{}{
+				"id":    user.ID,
+				"email": user.Email,
+				"name":  user.Name,
+			},
+		})
 	} else {
-		// If multiple origins, use the first one (web app)
-		if idx := strings.Index(frontendURL, ","); idx != -1 {
-			frontendURL = strings.TrimSpace(frontendURL[:idx])
+		// GET request - redirect to frontend with tokens in URL
+		// Use first CORS origin for redirect (the web app)
+		frontendURL := os.Getenv("CORS_ORIGIN")
+		if frontendURL == "" {
+			frontendURL = "http://localhost:3000"
+		} else {
+			// If multiple origins, use the first one (web app)
+			if idx := strings.Index(frontendURL, ","); idx != -1 {
+				frontendURL = strings.TrimSpace(frontendURL[:idx])
+			}
 		}
+
+		// Build redirect URL with tokens
+		redirectURL := fmt.Sprintf("%s/auth/callback?accessToken=%s&refreshToken=%s&expiresIn=%d",
+			frontendURL,
+			url.QueryEscape(tokenPair.AccessToken),
+			url.QueryEscape(tokenPair.RefreshToken),
+			tokenPair.ExpiresIn,
+		)
+
+		http.Redirect(w, r, redirectURL, http.StatusTemporaryRedirect)
 	}
-
-	// Build redirect URL with tokens
-	redirectURL := fmt.Sprintf("%s/auth/callback?accessToken=%s&refreshToken=%s&expiresIn=%d",
-		frontendURL,
-		url.QueryEscape(tokenPair.AccessToken),
-		url.QueryEscape(tokenPair.RefreshToken),
-		tokenPair.ExpiresIn,
-	)
-
-	http.Redirect(w, r, redirectURL, http.StatusTemporaryRedirect)
 }
 
 // GetGoogleAuthURL returns the Google OAuth authorization URL
@@ -160,13 +193,24 @@ func GetGoogleAuthURL(w http.ResponseWriter, r *http.Request) {
 }
 
 // exchangeGoogleCode exchanges an authorization code for tokens
-func exchangeGoogleCode(code string) (*GoogleTokenResponse, error) {
+// If customRedirectURI is provided (non-empty), it will be used instead of the default
+func exchangeGoogleCode(code string, customRedirectURI string) (*GoogleTokenResponse, error) {
 	clientID := os.Getenv("GOOGLE_CLIENT_ID")
 	clientSecret := os.Getenv("GOOGLE_CLIENT_SECRET")
-	redirectURI := os.Getenv("GOOGLE_REDIRECT_URI")
+	defaultRedirectURI := os.Getenv("GOOGLE_REDIRECT_URI")
 
-	if clientID == "" || clientSecret == "" || redirectURI == "" {
+	if clientID == "" || clientSecret == "" {
 		return nil, errors.New("OAuth credentials not configured")
+	}
+
+	// Use the provided redirect_uri from frontend, or fall back to default
+	redirectURI := customRedirectURI
+	if redirectURI == "" {
+		redirectURI = defaultRedirectURI
+	}
+
+	if redirectURI == "" {
+		return nil, errors.New("redirect_uri not provided")
 	}
 
 	fmt.Printf("Exchanging code with redirect_uri: %s\n", redirectURI)

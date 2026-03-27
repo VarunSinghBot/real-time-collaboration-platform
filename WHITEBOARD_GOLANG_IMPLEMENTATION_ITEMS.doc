@@ -1,0 +1,580 @@
+COLAB PLATFORM (WHITEBOARD)
+GOLANG IMPLEMENTATION ITEMS DOCUMENT
+Date: 24 March 2026
+
+TABLE OF CONTENTS
+Sl No | Question | Page No.
+I     | Challenge Exploration and Design Intent Description | 1
+1     | Implement the concept of Variables, values and type. | 2
+2     | Implement the concept of control flow. | 3
+3     | Implement the concept of Array and Slice. | 4
+4     | Implement the concept of Map and Structs. | 5
+5     | Implement the concept of functions and error handling | 6
+6     | Implement the concept of interface | 7
+7     | Implement the concept of Pointers, call by value and call by function. | 8
+8     | Implement the concept of JSON marshal and unmarshal. Write its unit test case. | 9
+9     | Implement the concept of Concurrency. | 10
+10    | Implement the concept of Variables, values and type. | 11
+
+====================================================================
+I. CHALLENGE EXPLORATION AND DESIGN INTENT DESCRIPTION
+====================================================================
+Goal:
+Build a reliable Go backend module for the Colab Whiteboard platform that supports room/session management, user state, board events, and real-time sync with clean and testable code.
+
+Project Context (Submission Scope):
+- Product: Collab Platform (multi-app collaboration suite).
+- Focus module: Whiteboard collaboration flow between `apps/api` (Go backend) and `apps/colab-whiteboard-web` (React + Tldraw frontend).
+- Development environment: Go backend implemented and validated in GoLand; frontend implemented in Vite-based React workspace.
+- Primary use case: multiple authenticated users can open the same board, draw in real time, and persist board metadata with permission-aware access.
+
+Problem Statement:
+The whiteboard needed a backend service layer that is simple to reason about in development but production-ready in behavior: strongly typed event payloads, stable JSON contracts, room/member validation, and non-blocking event broadcast under concurrent usage.
+
+Design Intent:
+- Keep data models explicit (typed structs for board objects and events).
+- Keep transport payloads stable (JSON contracts).
+- Keep operations predictable (deterministic control flow and error handling).
+- Keep runtime scalable (goroutine-based event fanout with channel backpressure controls).
+
+Delivery Intent for Project Evaluation:
+- Demonstrate core Go language concepts through real feature slices instead of isolated toy snippets.
+- Map each concept to whiteboard backend behavior and frontend integration impact.
+- Keep examples directly reusable in the Collab codebase with minimal adaptation.
+
+Mermaid: High-Level Whiteboard Architecture
+```mermaid
+flowchart LR
+    UI[Whiteboard Web Client] -->|WS/HTTP| API[Go API Layer]
+    API --> AUTH[Auth Middleware]
+    API --> ROOM[Room Service]
+    API --> EVENT[Event Dispatcher]
+    EVENT --> BROKER[In-Memory Hub or Redis PubSub]
+    ROOM --> STORE[(Postgres/State Store)]
+    EVENT --> STORE
+    API --> OBS[Logging + Metrics]
+```
+
+Mermaid: Request-to-Broadcast Sequence
+```mermaid
+sequenceDiagram
+    participant C as Client
+    participant A as Go API
+    participant R as RoomService
+    participant E as EventHub
+    participant O as Other Clients
+
+    C->>A: Send draw event (JSON)
+    A->>A: Validate + decode payload
+    A->>R: Check room membership
+    R-->>A: Member allowed
+    A->>E: Publish event
+    E-->>O: Broadcast to subscribers
+    A-->>C: Ack (event accepted)
+```
+
+====================================================================
+1. IMPLEMENT THE CONCEPT OF VARIABLES, VALUES AND TYPE
+====================================================================
+Objective:
+Use explicit and inferred variable declarations for whiteboard domain values.
+
+Colab Project Mapping:
+- Backend uses typed domain values to avoid ambiguity at service boundaries (room ID, user ID, tool type, stroke payload).
+- Frontend (`colab-whiteboard-web`) benefits from predictable payload shape, reducing runtime parsing issues and simplifying TypeScript interop.
+- Type-first modeling supports safer refactoring as collaboration features evolve (templates, roles, and board-level settings).
+
+Go Example:
+```go
+package whiteboard
+
+import "time"
+
+type ToolType string
+
+const (
+    ToolPen    ToolType = "pen"
+    ToolEraser ToolType = "eraser"
+)
+
+type Point struct {
+    X float64
+    Y float64
+}
+
+type DrawEvent struct {
+    RoomID    string
+    UserID    string
+    Tool      ToolType
+    Color     string
+    Thickness int
+    Points    []Point
+    CreatedAt time.Time
+}
+
+func NewDefaultEvent(roomID, userID string) DrawEvent {
+    thickness := 2
+    color := "#111111"
+
+    return DrawEvent{
+        RoomID:    roomID,
+        UserID:    userID,
+        Tool:      ToolPen,
+        Color:     color,
+        Thickness: thickness,
+        Points:    make([]Point, 0),
+        CreatedAt: time.Now().UTC(),
+    }
+}
+```
+
+====================================================================
+2. IMPLEMENT THE CONCEPT OF CONTROL FLOW
+====================================================================
+Objective:
+Use if/switch/for to validate event payloads and route event processing.
+
+Colab Project Mapping:
+- Control flow in request handlers ensures invalid draw operations are rejected before publish.
+- Membership checks protect private boards from unauthorized writes.
+- Deterministic validation path produces consistent error responses consumed by whiteboard UI notifications.
+
+Go Example:
+```go
+func ValidateDrawEvent(e DrawEvent) error {
+    if e.RoomID == "" || e.UserID == "" {
+        return ErrInvalidIdentity
+    }
+
+    if len(e.Points) == 0 {
+        return ErrEmptyStroke
+    }
+
+    switch e.Tool {
+    case ToolPen, ToolEraser:
+        // allowed
+    default:
+        return ErrUnsupportedTool
+    }
+
+    for i := 0; i < len(e.Points); i++ {
+        p := e.Points[i]
+        if p.X < 0 || p.Y < 0 {
+            return ErrInvalidCoordinate
+        }
+    }
+
+    return nil
+}
+```
+
+Mermaid: Validation Control Flow
+```mermaid
+flowchart TD
+    A[Start ValidateDrawEvent] --> B{RoomID/UserID empty?}
+    B -->|Yes| E1[Return ErrInvalidIdentity]
+    B -->|No| C{Points empty?}
+    C -->|Yes| E2[Return ErrEmptyStroke]
+    C -->|No| D{Tool supported?}
+    D -->|No| E3[Return ErrUnsupportedTool]
+    D -->|Yes| F[Loop through points]
+    F --> G{Any negative coordinate?}
+    G -->|Yes| E4[Return ErrInvalidCoordinate]
+    G -->|No| H[Return nil]
+```
+
+====================================================================
+3. IMPLEMENT THE CONCEPT OF ARRAY AND SLICE
+====================================================================
+Objective:
+Use arrays for fixed-size values and slices for dynamic draw points.
+
+Colab Project Mapping:
+- Arrays model compact fixed-size values (example: RGB triplets).
+- Slices represent variable-length stroke points sent from the drawing canvas.
+- Bounding-box calculation supports frontend rendering optimizations (viewport fit, selective redraw, and future hit-testing).
+
+Go Example:
+```go
+type RGB [3]uint8
+
+func StrokeBounds(points []Point) (minX, minY, maxX, maxY float64) {
+    if len(points) == 0 {
+        return 0, 0, 0, 0
+    }
+
+    minX, maxX = points[0].X, points[0].X
+    minY, maxY = points[0].Y, points[0].Y
+
+    for _, p := range points[1:] {
+        if p.X < minX {
+            minX = p.X
+        }
+        if p.X > maxX {
+            maxX = p.X
+        }
+        if p.Y < minY {
+            minY = p.Y
+        }
+        if p.Y > maxY {
+            maxY = p.Y
+        }
+    }
+
+    return minX, minY, maxX, maxY
+}
+```
+
+====================================================================
+4. IMPLEMENT THE CONCEPT OF MAP AND STRUCTS
+====================================================================
+Objective:
+Use map for room/user lookup and struct for whiteboard entities.
+
+Colab Project Mapping:
+- `map[string]UserSession` enables O(1) room membership checks during high-frequency event processing.
+- Struct-first room model keeps the in-memory state understandable for debugging in GoLand.
+- Event log structure can be extended for persistence snapshots and replay when reconnecting clients.
+
+Go Example:
+```go
+type UserSession struct {
+    UserID   string
+    UserName string
+    JoinedAt int64
+}
+
+type RoomState struct {
+    RoomID   string
+    Users    map[string]UserSession
+    EventLog []DrawEvent
+}
+
+func NewRoomState(roomID string) RoomState {
+    return RoomState{
+        RoomID:   roomID,
+        Users:    map[string]UserSession{},
+        EventLog: make([]DrawEvent, 0),
+    }
+}
+
+func (r *RoomState) AddUser(s UserSession) {
+    r.Users[s.UserID] = s
+}
+```
+
+Mermaid: Room State Model
+```mermaid
+classDiagram
+    class RoomState {
+      +string RoomID
+      +map~string, UserSession~ Users
+      +[]DrawEvent EventLog
+      +AddUser(UserSession)
+    }
+
+    class UserSession {
+      +string UserID
+      +string UserName
+      +int64 JoinedAt
+    }
+
+    class DrawEvent {
+      +string RoomID
+      +string UserID
+      +string Tool
+      +string Color
+      +int Thickness
+      +[]Point Points
+    }
+
+    RoomState "1" --> "many" UserSession
+    RoomState "1" --> "many" DrawEvent
+```
+
+====================================================================
+5. IMPLEMENT THE CONCEPT OF FUNCTIONS AND ERROR HANDLING
+====================================================================
+Objective:
+Define composable service functions and explicit errors.
+
+Colab Project Mapping:
+- Service functions isolate business rules from transport handlers (REST/WS), improving testability.
+- Named error values provide consistent status mapping (400/403/404 equivalents) for frontend handling.
+- `AppendEvent` demonstrates fail-fast validation before state mutation, reducing corruption risk in shared rooms.
+
+Go Example:
+```go
+import "errors"
+
+var (
+    ErrRoomNotFound       = errors.New("room not found")
+    ErrUserNotInRoom      = errors.New("user not in room")
+    ErrInvalidIdentity    = errors.New("invalid room or user id")
+    ErrEmptyStroke        = errors.New("empty stroke")
+    ErrUnsupportedTool    = errors.New("unsupported tool")
+    ErrInvalidCoordinate  = errors.New("invalid coordinate")
+)
+
+func AppendEvent(room *RoomState, userID string, e DrawEvent) error {
+    if room == nil {
+        return ErrRoomNotFound
+    }
+
+    if _, ok := room.Users[userID]; !ok {
+        return ErrUserNotInRoom
+    }
+
+    if err := ValidateDrawEvent(e); err != nil {
+        return err
+    }
+
+    room.EventLog = append(room.EventLog, e)
+    return nil
+}
+```
+
+====================================================================
+6. IMPLEMENT THE CONCEPT OF INTERFACE
+====================================================================
+Objective:
+Use interfaces for pluggable room/event persistence and pub/sub.
+
+Colab Project Mapping:
+- Interface-driven design allows swapping in-memory repo with DB-backed repository without changing service logic.
+- Event publisher abstraction supports scale-up path from local channel fanout to Redis or message broker.
+- Frontend contract remains stable because interface changes stay behind backend service boundaries.
+
+Go Example:
+```go
+type RoomRepository interface {
+    GetRoom(roomID string) (*RoomState, error)
+    SaveRoom(room *RoomState) error
+}
+
+type EventPublisher interface {
+    Publish(roomID string, event DrawEvent) error
+}
+
+type WhiteboardService struct {
+    repo RoomRepository
+    pub  EventPublisher
+}
+
+func (s WhiteboardService) HandleDraw(roomID, userID string, e DrawEvent) error {
+    room, err := s.repo.GetRoom(roomID)
+    if err != nil {
+        return err
+    }
+
+    if err := AppendEvent(room, userID, e); err != nil {
+        return err
+    }
+
+    if err := s.repo.SaveRoom(room); err != nil {
+        return err
+    }
+
+    return s.pub.Publish(roomID, e)
+}
+```
+
+====================================================================
+7. IMPLEMENT THE CONCEPT OF POINTERS, CALL BY VALUE AND CALL BY FUNCTION
+====================================================================
+Objective:
+Understand mutation semantics in room/state updates.
+
+Colab Project Mapping:
+- Pointer receivers are used where shared room state must be mutated safely and intentionally.
+- Value copies are preferred for transform-style helpers to avoid accidental side effects.
+- This distinction is critical in collaborative scenarios where subtle state mutation bugs can desync clients.
+
+Go Example:
+```go
+func AddPointByValue(points []Point, p Point) []Point {
+    // slice header is copied by value, underlying array may still be shared
+    return append(points, p)
+}
+
+func IncrementThicknessByPointer(e *DrawEvent) {
+    e.Thickness++
+}
+
+func ReplaceColorValue(e DrawEvent, color string) DrawEvent {
+    e.Color = color
+    return e
+}
+```
+
+Mermaid: Value vs Pointer Effect
+```mermaid
+flowchart LR
+    A[DrawEvent value copy] --> B[ReplaceColorValue]
+    B --> C[Returns new value]
+
+    D[DrawEvent pointer] --> E[IncrementThicknessByPointer]
+    E --> F[Original object mutated]
+```
+
+====================================================================
+8. IMPLEMENT THE CONCEPT OF JSON MARSHAL AND UNMARSHAL. WRITE ITS UNIT TEST CASE.
+====================================================================
+Objective:
+Encode/decode whiteboard events for API and WebSocket transport.
+
+Colab Project Mapping:
+- Whiteboard frontend emits JSON payloads over WebSocket; backend decodes, validates, and rebroadcasts.
+- Stable JSON fields are mandatory for compatibility between React/Tldraw event sources and Go handlers.
+- Unit testing encode/decode prevents regressions when event schema evolves (new tools, metadata, roles).
+
+Go Example:
+```go
+import "encoding/json"
+
+func EncodeEvent(e DrawEvent) ([]byte, error) {
+    return json.Marshal(e)
+}
+
+func DecodeEvent(data []byte) (DrawEvent, error) {
+    var e DrawEvent
+    err := json.Unmarshal(data, &e)
+    return e, err
+}
+```
+
+Unit Test Example:
+```go
+package whiteboard_test
+
+import (
+    "testing"
+    "time"
+)
+
+func TestEncodeDecodeEvent(t *testing.T) {
+    original := DrawEvent{
+        RoomID:    "room-101",
+        UserID:    "user-23",
+        Tool:      ToolPen,
+        Color:     "#ff0000",
+        Thickness: 3,
+        Points:    []Point{{X: 1.5, Y: 2.5}, {X: 3.5, Y: 4.5}},
+        CreatedAt: time.Unix(1700000000, 0).UTC(),
+    }
+
+    raw, err := EncodeEvent(original)
+    if err != nil {
+        t.Fatalf("marshal failed: %v", err)
+    }
+
+    decoded, err := DecodeEvent(raw)
+    if err != nil {
+        t.Fatalf("unmarshal failed: %v", err)
+    }
+
+    if decoded.RoomID != original.RoomID || decoded.UserID != original.UserID {
+        t.Fatalf("identity mismatch")
+    }
+
+    if len(decoded.Points) != len(original.Points) {
+        t.Fatalf("points length mismatch")
+    }
+}
+```
+
+====================================================================
+9. IMPLEMENT THE CONCEPT OF CONCURRENCY
+====================================================================
+Objective:
+Use goroutines, channels, and mutex for room broadcast and state safety.
+
+Colab Project Mapping:
+- Each whiteboard room behaves as a concurrent stream with multiple readers and writers.
+- Buffered channels and non-blocking publish logic keep one slow client from degrading room-wide latency.
+- Mutex-protected subscriber registry ensures safe concurrent join/leave and event fanout.
+
+Go Example:
+```go
+import "sync"
+
+type Hub struct {
+    mu          sync.RWMutex
+    subscribers map[string][]chan DrawEvent
+}
+
+func NewHub() *Hub {
+    return &Hub{subscribers: map[string][]chan DrawEvent{}}
+}
+
+func (h *Hub) Subscribe(roomID string) <-chan DrawEvent {
+    ch := make(chan DrawEvent, 32)
+    h.mu.Lock()
+    h.subscribers[roomID] = append(h.subscribers[roomID], ch)
+    h.mu.Unlock()
+    return ch
+}
+
+func (h *Hub) Publish(roomID string, e DrawEvent) {
+    h.mu.RLock()
+    targets := append([]chan DrawEvent{}, h.subscribers[roomID]...)
+    h.mu.RUnlock()
+
+    for _, ch := range targets {
+        select {
+        case ch <- e:
+        default:
+            // drop on slow consumer to avoid blocking producer
+        }
+    }
+}
+```
+
+Mermaid: Concurrent Event Fanout
+```mermaid
+flowchart LR
+    A[Producer goroutine] --> B[Hub.Publish]
+    B --> C1[Subscriber ch1]
+    B --> C2[Subscriber ch2]
+    B --> C3[Subscriber ch3]
+    C1 --> D1[Client 1]
+    C2 --> D2[Client 2]
+    C3 --> D3[Client 3]
+```
+
+====================================================================
+10. IMPLEMENT THE CONCEPT OF VARIABLES, VALUES AND TYPE
+====================================================================
+Objective:
+Consolidate production-readiness practices used in the Collab whiteboard implementation.
+
+Submission-Oriented Summary:
+- Backend quality: typed models, explicit error handling, interface-based service boundaries, and concurrency-safe fanout.
+- Frontend integration quality: contract-consistent JSON payloads, predictable response semantics, and real-time event synchronization behavior.
+- Maintainability: concept-wise implementation enables easier onboarding, debugging, and incremental enhancement.
+- Extensibility: architecture supports adding board persistence, role-based event filtering, and horizontal event distribution.
+
+Checklist:
+- Use domain types (`ToolType`, `RoomID`, `UserID`) instead of raw strings where possible.
+- Use zero-value safe structs.
+- Keep exported fields JSON-tagged for API compatibility.
+- Prefer explicit types in service boundaries and inferred types inside function bodies.
+- Keep frontend and backend event names/versioning aligned to avoid protocol drift.
+- Add integration tests for join/leave/broadcast edge cases before production rollout.
+
+Mermaid: Type Safety Emphasis
+```mermaid
+flowchart TD
+    A[Raw Input JSON] --> B[Typed Struct Decode]
+    B --> C[Validation]
+    C --> D[Business Function]
+    D --> E[Typed Output + JSON Encode]
+```
+
+====================================================================
+END OF DOCUMENT
+====================================================================
+
+Notes:
+- This file is Word-compatible plain text with .doc extension.
+- Mermaid blocks can be rendered in tools that support Mermaid (Markdown preview, Mermaid Live Editor, or documentation pipelines).

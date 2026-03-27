@@ -63,8 +63,11 @@ func SetupRouter() http.Handler {
 		})
 	})
 
-	// WebSocket route (outside /api to avoid JSON middleware)
+	// WebSocket routes (outside /api to avoid JSON middleware)
 	r.Get("/ws/collab/{roomId}", ws.HandleCollabWS)
+	// y-websocket appends the room name as a path segment: /ws/document/{roomId}
+	r.Get("/ws/document/{roomId}", ws.HandleDocumentWS)
+	r.Get("/ws/document", ws.HandleDocumentWS) // fallback for direct query-param connections
 
 	// API routes
 	r.Route("/api", func(r chi.Router) {
@@ -76,6 +79,9 @@ func SetupRouter() http.Handler {
 
 		// Collaborative whiteboard routes
 		routes.SetupCollabWhiteboardRoutes(r)
+
+		// Document routes
+		routes.SetupDocumentRoutes(r)
 
 		// Example route: list users
 		r.Route("/v1/users", func(r chi.Router) {

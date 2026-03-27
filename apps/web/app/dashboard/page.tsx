@@ -10,6 +10,7 @@ import { usePreferences, THEME_TOKENS, ACCENT_PALETTES } from "@/lib/preferences
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:4000";
 const WHITEBOARD_URL = process.env.NEXT_PUBLIC_WHITEBOARD_URL || "http://localhost:5173";
+const WORD_EDITOR_URL = process.env.NEXT_PUBLIC_WORD_EDITOR_URL || "http://localhost:5174";
 
 // ─── Gradient palette for board thumbnails ───────────────────────────────────
 const BOARD_GRADIENTS = [
@@ -104,6 +105,19 @@ interface WhiteboardItem {
   updatedAt: string;
 }
 
+interface DocumentItem {
+  id: string;
+  roomCode: string;
+  title: string;
+  ownerId: string;
+  ownerName: string;
+  ownerEmail: string;
+  permission: string;
+  memberCount: number;
+  createdAt: string;
+  updatedAt: string;
+}
+
 interface TeamMember {
   id: string;
   userId: string;
@@ -121,8 +135,11 @@ export default function Dashboard() {
   const { prefs } = usePreferences();
   const T = THEME_TOKENS[prefs.theme];
   const A = ACCENT_PALETTES[prefs.accentColor];
+  const [workspaceType, setWorkspaceType] = useState<"whiteboard" | "document">("whiteboard");
   const [whiteboards, setWhiteboards] = useState<WhiteboardItem[]>([]);
+  const [documents, setDocuments] = useState<DocumentItem[]>([]);
   const [loadingBoards, setLoadingBoards] = useState(true);
+  const [loadingDocuments, setLoadingDocuments] = useState(true);
   const [creating, setCreating] = useState(false);
   const [showCreateInput, setShowCreateInput] = useState(false);
   const [newTitle, setNewTitle] = useState("");
@@ -146,6 +163,8 @@ export default function Dashboard() {
   const [loadingMembers, setLoadingMembers] = useState(false);
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [mobileRightSidebarOpen, setMobileRightSidebarOpen] = useState(false);
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [editingTitle, setEditingTitle] = useState("");
 
   const updateThumbsScroll = () => {
     const el = thumbsScrollRef.current;
@@ -250,14 +269,39 @@ export default function Dashboard() {
       try {
         const res = await apiFetch(`${API_URL}/api/collab-whiteboard`);
         if (res.ok) setWhiteboards(await res.json());
-        // Do NOT call contextLogout() here on 401.  A 401 from the boards
-        // endpoint means the access token expired and the refresh may have
-        // been rate-limited — it does NOT mean the user's session is invalid.
-        // The auth guard useEffect handles real session expiry.
       } catch { /* ignore */ }
       finally { setLoadingBoards(false); }
     };
-    if (isAuthenticated) fetchWhiteboards();
+    const fetchDocuments = async () => {
+      if (!isAuthenticated) return;
+      try {
+        const res = await apiFetch(`${API_URL}/api/documents`);
+        if (res.ok) {
+          const docs = await res.json();
+          // Use roomCode as ID if id is missing, and filter out any invalid entries
+          const validDocs = docs
+            .filter((doc: any) => doc.roomCode || doc.id)
+            .map((doc: any) => ({
+              id: doc.id || doc.roomCode,
+              roomCode: doc.roomCode,
+              title: doc.title || "Untitled Document",
+              ownerId: doc.ownerId || "",
+              ownerName: doc.ownerName || "",
+              ownerEmail: doc.ownerEmail || "",
+              permission: doc.permission || "owner",
+              memberCount: doc.memberCount || 0,
+              createdAt: doc.createdAt,
+              updatedAt: doc.updatedAt || doc.createdAt,
+            }));
+          setDocuments(validDocs);
+        }
+      } catch { /* ignore */ }
+      finally { setLoadingDocuments(false); }
+    };
+    if (isAuthenticated) {
+      fetchWhiteboards();
+      fetchDocuments();
+    }
   }, [isAuthenticated]);
 
   // Fetch all team members across all whiteboards
@@ -371,10 +415,33 @@ export default function Dashboard() {
         setShowCreateInput(false);
         setNewTitle("");
       }
-      // Do NOT call contextLogout() on 401 here — a single 401 from the
-      // create endpoint just means the token needs refreshing; apiFetch
-      // already retried once.  Logging out here triggers a logout → 429
-      // cascade.  Real session expiry is handled by the auth guard effect.
+    } catch { /* ignore */ }
+    finally { setCreating(false); }
+  };
+
+  const handleCreateDocument = async () => {
+    setCreating(true);
+    try {
+      const res = await apiFetch(`${API_URL}/api/documents`, {
+        method: "POST",
+        body: JSON.stringify({ title: newTitle || "Untitled Document" }),
+      });
+      if (res.ok) {
+        const data = await res.json();
+        const tokensStr = localStorage.getItem("auth_tokens");
+        const tokens = tokensStr ? JSON.parse(tokensStr) : {};
+        const { accessToken = "", refreshToken = "", expiresIn = 900, issuedAt = Date.now() } = tokens;
+        window.open(
+          `${WORD_EDITOR_URL}/document/${data.roomCode}?accessToken=${encodeURIComponent(accessToken)}&refreshToken=${encodeURIComponent(refreshToken)}&expiresIn=${expiresIn}&issuedAt=${issuedAt}`,
+          "_blank", "noopener,noreferrer"
+        );
+        setDocuments(prev => [{
+          ...data, permission: "owner", memberCount: 0,
+          ownerName: user?.name || "", ownerEmail: user?.email || "",
+        }, ...prev]);
+        setShowCreateInput(false);
+        setNewTitle("");
+      }
     } catch { /* ignore */ }
     finally { setCreating(false); }
   };
@@ -398,6 +465,60 @@ export default function Dashboard() {
       const res = await apiFetch(`${API_URL}/api/collab-whiteboard/${id}`, { method: "DELETE" });
       if (res.ok) setWhiteboards(prev => prev.filter(wb => wb.id !== id));
     } catch { /* ignore */ }
+  };
+
+  const handleOpenDocument = (doc: DocumentItem) => {
+    try {
+      const tokensStr = localStorage.getItem("auth_tokens");
+      const tokens = tokensStr ? JSON.parse(tokensStr) : {};
+      const { accessToken = "", refreshToken = "", expiresIn = 900, issuedAt = Date.now() } = tokens;
+      window.open(
+        `${WORD_EDITOR_URL}/document/${doc.roomCode}?accessToken=${encodeURIComponent(accessToken)}&refreshToken=${encodeURIComponent(refreshToken)}&expiresIn=${expiresIn}&issuedAt=${issuedAt}`,
+        "_blank", "noopener,noreferrer"
+      );
+    } catch { window.open(`${WORD_EDITOR_URL}/document/${doc.roomCode}`, "_blank", "noopener,noreferrer"); }
+  };
+
+  const handleDeleteDocument = async (roomCode: string) => {
+    if (!confirm("Delete this document? This cannot be undone.")) return;
+    try {
+      const res = await apiFetch(`${API_URL}/api/documents/${roomCode}`, { method: "DELETE" });
+      if (res.ok) setDocuments(prev => prev.filter(doc => doc.roomCode !== roomCode));
+    } catch { /* ignore */ }
+  };
+
+  const handleStartEditTitle = (id: string, currentTitle: string) => {
+    setEditingId(id);
+    setEditingTitle(currentTitle);
+  };
+
+  const handleSaveTitle = async (id: string, isWhiteboard: boolean) => {
+    if (!editingTitle.trim() || editingTitle === (isWhiteboard ? whiteboards : documents).find(item => item.id === id)?.title) {
+      setEditingId(null);
+      return;
+    }
+    try {
+      const endpoint = isWhiteboard 
+        ? `${API_URL}/api/collab-whiteboard/${id}` 
+        : `${API_URL}/api/documents/${(isWhiteboard ? whiteboards : documents).find(d => d.id === id)?.roomCode}`;
+      const res = await apiFetch(endpoint, {
+        method: "PUT",
+        body: JSON.stringify({ title: editingTitle.trim() }),
+      });
+      if (res.ok) {
+        if (isWhiteboard) {
+          setWhiteboards(prev => prev.map(wb => wb.id === id ? { ...wb, title: editingTitle.trim() } : wb));
+        } else {
+          setDocuments(prev => prev.map(doc => doc.id === id ? { ...doc, title: editingTitle.trim() } : doc));
+        }
+      }
+    } catch { /* ignore */ }
+    setEditingId(null);
+  };
+
+  const handleCancelEdit = () => {
+    setEditingId(null);
+    setEditingTitle("");
   };
 
   const formatDate = (str: string) => {
@@ -434,6 +555,32 @@ export default function Dashboard() {
       .filter(wb => {
         if (activeTab === "owned") return wb.permission === "owner";
         if (activeTab === "shared") return wb.permission !== "owner";
+        return true;
+      })
+      .sort((a, b) => {
+        if (sortBy === "name") return a.title.localeCompare(b.title);
+        if (sortBy === "created") return new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime();
+        return new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime();
+      });
+  })();
+
+  // Determine which documents to display based on navActive
+  const displayedDocuments = (() => {
+    if (navActive === "recent") {
+      return recentIds
+        .map(id => documents.find(d => d.id === id))
+        .filter(Boolean) as DocumentItem[];
+    }
+    if (navActive === "starred") {
+      return starredIds
+        .map(id => documents.find(d => d.id === id))
+        .filter(Boolean) as DocumentItem[];
+    }
+    // navActive === "boards" or "people"
+    return documents
+      .filter(doc => {
+        if (activeTab === "owned") return doc.permission === "owner";
+        if (activeTab === "shared") return doc.permission !== "owner";
         return true;
       })
       .sort((a, b) => {
@@ -743,24 +890,60 @@ export default function Dashboard() {
         </header>
 
         <div className="flex-1 overflow-y-auto dash-scroll px-4 md:px-6 py-4 md:py-5 space-y-4 md:space-y-5">
+          {/* Workspace Type Toggle */}
+          {navActive === "boards" && (
+            <div className="flex items-center gap-2 justify-center">
+              <button
+                onClick={() => setWorkspaceType("whiteboard")}
+                className="flex items-center gap-2 px-4 md:px-6 py-2.5 rounded-xl text-sm font-semibold transition-all duration-200"
+                style={workspaceType === "whiteboard"
+                  ? { background: A.bg, color: "#ffffff", boxShadow: `0 4px 16px ${A.glow}` }
+                  : { background: T.inputBg, color: T.textMuted, border: `1px solid ${T.border}` }}
+              >
+                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z" />
+                </svg>
+                Whiteboards
+              </button>
+              <button
+                onClick={() => setWorkspaceType("document")}
+                className="flex items-center gap-2 px-4 md:px-6 py-2.5 rounded-xl text-sm font-semibold transition-all duration-200"
+                style={workspaceType === "document"
+                  ? { background: A.bg, color: "#ffffff", boxShadow: `0 4px 16px ${A.glow}` }
+                  : { background: T.inputBg, color: T.textMuted, border: `1px solid ${T.border}` }}
+              >
+                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+                </svg>
+                Documents
+              </button>
+            </div>
+          )}
+
           {/* Section header */}
           <div className="flex flex-col md:flex-row md:items-end justify-between gap-2">
             <div>
               <h1 className="text-lg md:text-xl font-bold" style={{ color: T.text }}>
-                {navActive === "starred" ? "Starred Boards" 
-                  : navActive === "recent" ? "Recent Boards" 
+                {navActive === "starred" ? (workspaceType === "document" ? "Starred Documents" : "Starred Boards")
+                  : navActive === "recent" ? (workspaceType === "document" ? "Recent Documents" : "Recent Boards")
                   : navActive === "people" ? "Team Members"
-                  : "Find your boards"}
+                  : workspaceType === "document" ? "Find your documents" : "Find your boards"}
               </h1>
               <p className="text-xs md:text-sm mt-0.5" style={{ color: T.textMuted }}>
-                {loadingBoards || (navActive === "people" && loadingMembers) ? "Loading\u2026" 
+                {(workspaceType === "whiteboard" ? loadingBoards : loadingDocuments) || (navActive === "people" && loadingMembers) ? "Loading\u2026" 
                   : navActive === "starred" 
-                    ? `${starredBoards.length} starred board${starredBoards.length !== 1 ? "s" : ""}` 
+                    ? workspaceType === "document" 
+                      ? `${starredIds.filter(id => documents.find(d => d.id === id)).length} starred document${starredIds.filter(id => documents.find(d => d.id === id)).length !== 1 ? "s" : ""}`
+                      : `${starredBoards.length} starred board${starredBoards.length !== 1 ? "s" : ""}` 
                     : navActive === "recent"
-                      ? `${recentBoards.length} recent board${recentBoards.length !== 1 ? "s" : ""}`
+                      ? workspaceType === "document"
+                        ? `${recentIds.filter(id => documents.find(d => d.id === id)).length} recent document${recentIds.filter(id => documents.find(d => d.id === id)).length !== 1 ? "s" : ""}`
+                        : `${recentBoards.length} recent board${recentBoards.length !== 1 ? "s" : ""}`
                       : navActive === "people"
                         ? `${uniqueMemberCount()} unique member${uniqueMemberCount() !== 1 ? "s" : ""} across ${whiteboards.length} board${whiteboards.length !== 1 ? "s" : ""}`
-                        : `${whiteboards.length} board${whiteboards.length !== 1 ? "s" : ""}`
+                        : workspaceType === "document"
+                          ? `${documents.length} document${documents.length !== 1 ? "s" : ""}`
+                          : `${whiteboards.length} board${whiteboards.length !== 1 ? "s" : ""}`
                 }
               </p>
             </div>
@@ -773,7 +956,7 @@ export default function Dashboard() {
                   boardsGridRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
                 }}
               >
-                See All ({whiteboards.length})
+                See All ({workspaceType === "document" ? documents.length : whiteboards.length})
               </button>
             )}
           </div>
@@ -1076,11 +1259,11 @@ export default function Dashboard() {
                   })}
                 </div>
               )
-            ) : loadingBoards ? (
+            ) : (workspaceType === "whiteboard" ? loadingBoards : loadingDocuments) ? (
               <div className="flex items-center justify-center py-16">
                 <div className="w-7 h-7 border-2 border-violet-900 border-t-violet-500 rounded-full animate-spin" />
               </div>
-            ) : displayedBoards.length === 0 ? (
+            ) : (workspaceType === "whiteboard" ? displayedBoards.length : displayedDocuments.length) === 0 ? (
               <motion.div
                 initial={{ opacity: 0 }} animate={{ opacity: 1 }}
                 className="text-center py-16 rounded-2xl border border-dashed"
@@ -1092,114 +1275,201 @@ export default function Dashboard() {
                       <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M11.049 2.927c.3-.921 1.603-.921 1.902 0l1.519 4.674a1 1 0 00.95.69h4.915c.969 0 1.371 1.24.588 1.81l-3.976 2.888a1 1 0 00-.363 1.118l1.518 4.674c.3.922-.755 1.688-1.538 1.118l-3.976-2.888a1 1 0 00-1.176 0l-3.976 2.888c-.783.57-1.838-.197-1.538-1.118l1.518-4.674a1 1 0 00-.363-1.118l-3.976-2.888c-.784-.57-.38-1.81.588-1.81h4.914a1 1 0 00.951-.69l1.519-4.674z" />
                     ) : navActive === "recent" ? (
                       <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
+                    ) : workspaceType === "document" ? (
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
                     ) : (
                       <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z" />
                     )}
                   </svg>
                 </div>
                 <p className="font-semibold" style={{ color: T.textMuted }}>
-                  {navActive === "starred" ? "No starred boards" : navActive === "recent" ? "No recent boards" : "No boards here"}
+                  {navActive === "starred" 
+                    ? workspaceType === "document" ? "No starred documents" : "No starred boards"
+                    : navActive === "recent" 
+                      ? workspaceType === "document" ? "No recent documents" : "No recent boards"
+                      : workspaceType === "document" ? "No documents here" : "No boards here"}
                 </p>
                 <p className="text-sm mt-1" style={{ color: T.textFaint }}>
-                  {navActive === "starred" ? "Star your favorite boards to see them here" : navActive === "recent" ? "Your recently opened boards will appear here" : "Create a new board to start collaborating"}
+                  {navActive === "starred" 
+                    ? workspaceType === "document" ? "Star your favorite documents to see them here" : "Star your favorite boards to see them here"
+                    : navActive === "recent" 
+                      ? workspaceType === "document" ? "Your recently opened documents will appear here" : "Your recently opened boards will appear here"
+                      : workspaceType === "document" ? "Create a new document to start writing" : "Create a new board to start collaborating"}
                 </p>
               </motion.div>
             ) : prefs.boardLayout === "list" ? (
               <div className="flex flex-col gap-2 pb-4">
-                {displayedBoards.map((wb, i) => (
+                {(workspaceType === "whiteboard" ? displayedBoards : displayedDocuments).map((item, i) => {
+                  const isWhiteboard = workspaceType === "whiteboard";
+                  const wb = item as WhiteboardItem;
+                  const doc = item as DocumentItem;
+                  // Use roomCode as fallback for key to ensure uniqueness
+                  const itemKey = isWhiteboard ? `wb-${item.id}` : `doc-${item.id || doc.roomCode}`;
+                  return (
                   <motion.div
-                    key={wb.id}
+                    key={itemKey}
                     initial={{ opacity: 0, x: -8 }}
                     animate={{ opacity: 1, x: 0 }}
                     transition={{ duration: 0.18, delay: i * 0.03 }}
                     className="group flex items-center gap-3 px-4 py-3 rounded-xl border transition-all"
                     style={{ background: T.bgCard, borderColor: T.border }}
                   >
-                    <div className={`w-9 h-9 rounded-xl bg-gradient-to-br ${getBoardGradient(wb.id)} flex items-center justify-center shrink-0 shadow-md`}>
-                      <span className="text-white text-[10px] font-black">{wb.title.slice(0, 2).toUpperCase()}</span>
+                    <div className={`w-9 h-9 rounded-xl bg-gradient-to-br ${getBoardGradient(item.id)} flex items-center justify-center shrink-0 shadow-md`}>
+                      <span className="text-white text-[10px] font-black">{item.title.slice(0, 2).toUpperCase()}</span>
                     </div>
                     <div className="flex-1 min-w-0">
-                      <p className="text-sm font-semibold truncate" style={{ color: T.text }}>{wb.title}</p>
-                      <p className="text-xs" style={{ color: T.textFaint }}>{wb.roomCode} · {formatDate(wb.updatedAt)}</p>
+                      {editingId === item.id ? (
+                        <input
+                          type="text"
+                          value={editingTitle}
+                          onChange={(e) => setEditingTitle(e.target.value)}
+                          onBlur={() => handleSaveTitle(item.id, isWhiteboard)}
+                          onKeyDown={(e) => {
+                            if (e.key === "Enter") handleSaveTitle(item.id, isWhiteboard);
+                            if (e.key === "Escape") handleCancelEdit();
+                          }}
+                          autoFocus
+                          className="text-sm font-semibold px-2 py-1 rounded border w-full"
+                          style={{ background: T.inputBg, color: T.text, borderColor: A.ring }}
+                        />
+                      ) : (
+                        <p className="text-sm font-semibold truncate" style={{ color: T.text }}>{item.title}</p>
+                      )}
+                      <p className="text-xs" style={{ color: T.textFaint }}>{item.roomCode} · {formatDate(item.updatedAt)}</p>
                     </div>
                     <span className="text-[10px] px-2 py-0.5 rounded-full border font-semibold shrink-0"
-                      style={wb.permission === "owner" ? { color: A.text, background: A.light, borderColor: A.ring } : { color: T.textFaint, background: T.inputBg, borderColor: T.border }}>
-                      {wb.permission === "owner" ? "Owner" : wb.permission === "edit" ? "Editor" : "Viewer"}
+                      style={item.permission === "owner" ? { color: A.text, background: A.light, borderColor: A.ring } : { color: T.textFaint, background: T.inputBg, borderColor: T.border }}>
+                      {item.permission === "owner" ? "Owner" : item.permission === "edit" ? "Editor" : "Viewer"}
                     </span>
                     <div className="flex items-center gap-1.5 shrink-0">
                       <button 
-                        onClick={e => toggleStar(wb.id, e)} 
+                        onClick={e => toggleStar(item.id, e)} 
                         className="p-1.5 rounded-lg transition-all" 
-                        style={{ color: starredIds.includes(wb.id) ? "#fbbf24" : T.textFaint }}
+                        style={{ color: starredIds.includes(item.id) ? "#fbbf24" : T.textFaint }}
                         onMouseEnter={e => { 
-                          (e.currentTarget as HTMLElement).style.color = starredIds.includes(wb.id) ? "#f59e0b" : "#fbbf24"; 
+                          (e.currentTarget as HTMLElement).style.color = starredIds.includes(item.id) ? "#f59e0b" : "#fbbf24"; 
                           (e.currentTarget as HTMLElement).style.background = "rgba(251,191,36,0.1)"; 
                         }}
                         onMouseLeave={e => { 
-                          (e.currentTarget as HTMLElement).style.color = starredIds.includes(wb.id) ? "#fbbf24" : T.textFaint; 
+                          (e.currentTarget as HTMLElement).style.color = starredIds.includes(item.id) ? "#fbbf24" : T.textFaint; 
                           (e.currentTarget as HTMLElement).style.background = "transparent"; 
                         }}
                       >
-                        <svg className="w-3.5 h-3.5" fill={starredIds.includes(wb.id) ? "currentColor" : "none"} stroke="currentColor" viewBox="0 0 24 24">
+                        <svg className="w-3.5 h-3.5" fill={starredIds.includes(item.id) ? "currentColor" : "none"} stroke="currentColor" viewBox="0 0 24 24">
                           <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11.049 2.927c.3-.921 1.603-.921 1.902 0l1.519 4.674a1 1 0 00.95.69h4.915c.969 0 1.371 1.24.588 1.81l-3.976 2.888a1 1 0 00-.363 1.118l1.518 4.674c.3.922-.755 1.688-1.538 1.118l-3.976-2.888a1 1 0 00-1.176 0l-3.976 2.888c-.783.57-1.838-.197-1.538-1.118l1.518-4.674a1 1 0 00-.363-1.118l-3.976-2.888c-.784-.57-.38-1.81.588-1.81h4.914a1 1 0 00.951-.69l1.519-4.674z" />
                         </svg>
                       </button>
-                      {wb.permission === "owner" && (
+                      {item.permission === "owner" && (
                         <>
-                          <button onClick={e => { e.stopPropagation(); setManagingWhiteboard(wb); }} className="p-1.5 rounded-lg transition-all" style={{ color: T.textFaint }}
+                          <button
+                            onClick={e => { e.stopPropagation(); handleStartEditTitle(item.id, item.title); }}
+                            className="p-1.5 rounded-lg transition-all"
+                            style={{ color: T.textFaint }}
                             onMouseEnter={e => { (e.currentTarget as HTMLElement).style.color = A.text; (e.currentTarget as HTMLElement).style.background = A.light; }}
-                            onMouseLeave={e => { (e.currentTarget as HTMLElement).style.color = T.textFaint; (e.currentTarget as HTMLElement).style.background = "transparent"; }}>
-                            <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4.354a4 4 0 110 5.292M15 21H3v-1a6 6 0 0112 0v1zm0 0h6v-1a6 6 0 00-9-5.197M13 7a4 4 0 11-8 0 4 4 0 018 0z" /></svg>
+                            onMouseLeave={e => { (e.currentTarget as HTMLElement).style.color = T.textFaint; (e.currentTarget as HTMLElement).style.background = "transparent"; }}
+                          >
+                            <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z" />
+                            </svg>
                           </button>
-                          <button onClick={e => { e.stopPropagation(); handleDeleteWhiteboard(wb.id); }} className="p-1.5 rounded-lg transition-all" style={{ color: T.textFaint }}
+                          {isWhiteboard && (
+                            <button onClick={e => { e.stopPropagation(); setManagingWhiteboard(wb); }} className="p-1.5 rounded-lg transition-all" style={{ color: T.textFaint }}
+                              onMouseEnter={e => { (e.currentTarget as HTMLElement).style.color = A.text; (e.currentTarget as HTMLElement).style.background = A.light; }}
+                              onMouseLeave={e => { (e.currentTarget as HTMLElement).style.color = T.textFaint; (e.currentTarget as HTMLElement).style.background = "transparent"; }}>
+                              <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4.354a4 4 0 110 5.292M15 21H3v-1a6 6 0 0112 0v1zm0 0h6v-1a6 6 0 00-9-5.197M13 7a4 4 0 11-8 0 4 4 0 018 0z" /></svg>
+                            </button>
+                          )}
+                          <button 
+                            onClick={e => { 
+                              e.stopPropagation(); 
+                              isWhiteboard ? handleDeleteWhiteboard(wb.id) : handleDeleteDocument(doc.roomCode); 
+                            }} 
+                            className="p-1.5 rounded-lg transition-all" 
+                            style={{ color: T.textFaint }}
                             onMouseEnter={e => { (e.currentTarget as HTMLElement).style.color = "#f87171"; (e.currentTarget as HTMLElement).style.background = "rgba(239,68,68,0.1)"; }}
                             onMouseLeave={e => { (e.currentTarget as HTMLElement).style.color = T.textFaint; (e.currentTarget as HTMLElement).style.background = "transparent"; }}>
                             <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" /></svg>
                           </button>
                         </>
                       )}
-                      <button onClick={() => handleOpenWhiteboard(wb)} className="px-3 py-1.5 text-white text-xs font-semibold rounded-xl transition-colors shadow-md"
-                        style={{ background: A.bg }} onMouseEnter={e => (e.currentTarget as HTMLElement).style.background = A.hover} onMouseLeave={e => (e.currentTarget as HTMLElement).style.background = A.bg}>
+                      <button 
+                        onClick={() => isWhiteboard ? handleOpenWhiteboard(wb) : handleOpenDocument(doc)} 
+                        className="px-3 py-1.5 text-white text-xs font-semibold rounded-xl transition-colors shadow-md"
+                        style={{ background: A.bg }} 
+                        onMouseEnter={e => (e.currentTarget as HTMLElement).style.background = A.hover} 
+                        onMouseLeave={e => (e.currentTarget as HTMLElement).style.background = A.bg}>
                         Open
                       </button>
                     </div>
                   </motion.div>
-                ))}
+                );
+                })}
               </div>
             ) : prefs.boardLayout === "compact" ? (
               <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2 pb-4">
-                {displayedBoards.map((wb, i) => (
+                {(workspaceType === "whiteboard" ? displayedBoards : displayedDocuments).map((item, i) => {
+                  const isWhiteboard = workspaceType === "whiteboard";
+                  const wb = item as WhiteboardItem;
+                  const doc = item as DocumentItem;
+                  // Use roomCode as fallback for key to ensure uniqueness
+                  const itemKey = isWhiteboard ? `wb-${item.id}` : `doc-${item.id || doc.roomCode}`;
+                  return (
                   <motion.div
-                    key={wb.id}
+                    key={itemKey}
                     initial={{ opacity: 0, scale: 0.95 }}
                     animate={{ opacity: 1, scale: 1 }}
                     transition={{ duration: 0.18, delay: i * 0.03 }}
                     className="group border rounded-xl p-3 transition-all cursor-pointer relative"
                     style={{ background: T.bgCard, borderColor: T.border }}
-                    onClick={() => handleOpenWhiteboard(wb)}
+                    onClick={() => isWhiteboard ? handleOpenWhiteboard(wb) : handleOpenDocument(doc)}
                   >
-                    <button
-                      onClick={e => toggleStar(wb.id, e)}
-                      className="absolute top-2 right-2 p-1 rounded-lg transition-all opacity-0 group-hover:opacity-100"
-                      style={{ color: starredIds.includes(wb.id) ? "#fbbf24" : T.textFaint, background: T.bgCard }}
-                    >
-                      <svg className="w-3 h-3" fill={starredIds.includes(wb.id) ? "currentColor" : "none"} stroke="currentColor" viewBox="0 0 24 24">
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11.049 2.927c.3-.921 1.603-.921 1.902 0l1.519 4.674a1 1 0 00.95.69h4.915c.969 0 1.371 1.24.588 1.81l-3.976 2.888a1 1 0 00-.363 1.118l1.518 4.674c.3.922-.755 1.688-1.538 1.118l-3.976-2.888a1 1 0 00-1.176 0l-3.976 2.888c-.783.57-1.838-.197-1.538-1.118l1.518-4.674a1 1 0 00-.363-1.118l-3.976-2.888c-.784-.57-.38-1.81.588-1.81h4.914a1 1 0 00.951-.69l1.519-4.674z" />
-                      </svg>
-                    </button>
-                    <div className={`w-8 h-8 rounded-lg bg-gradient-to-br ${getBoardGradient(wb.id)} flex items-center justify-center mb-2 shadow-sm`}>
-                      <span className="text-white text-[10px] font-black">{wb.title.slice(0, 2).toUpperCase()}</span>
+                    <div className="absolute top-2 right-2 flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                      <button
+                        onClick={e => toggleStar(item.id, e)}
+                        className="p-1 rounded-lg transition-all"
+                        style={{ color: starredIds.includes(item.id) ? "#fbbf24" : T.textFaint, background: T.bgCard }}
+                      >
+                        <svg className="w-3 h-3" fill={starredIds.includes(item.id) ? "currentColor" : "none"} stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11.049 2.927c.3-.921 1.603-.921 1.902 0l1.519 4.674a1 1 0 00.95.69h4.915c.969 0 1.371 1.24.588 1.81l-3.976 2.888a1 1 0 00-.363 1.118l1.518 4.674c.3.922-.755 1.688-1.538 1.118l-3.976-2.888a1 1 0 00-1.176 0l-3.976 2.888c-.783.57-1.838-.197-1.538-1.118l1.518-4.674a1 1 0 00-.363-1.118l-3.976-2.888c-.784-.57-.38-1.81.588-1.81h4.914a1 1 0 00.951-.69l1.519-4.674z" />
+                        </svg>
+                      </button>
+                      {item.permission === "owner" && (
+                        <button
+                          onClick={e => { 
+                            e.stopPropagation(); 
+                            isWhiteboard ? handleDeleteWhiteboard(wb.id) : handleDeleteDocument(doc.roomCode); 
+                          }}
+                          className="p-1 rounded-lg transition-all"
+                          style={{ color: T.textFaint, background: T.bgCard }}
+                          onMouseEnter={e => (e.currentTarget as HTMLElement).style.color = "#f87171"}
+                          onMouseLeave={e => (e.currentTarget as HTMLElement).style.color = T.textFaint}
+                        >
+                          <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                          </svg>
+                        </button>
+                      )}
                     </div>
-                    <p className="text-xs font-semibold truncate" style={{ color: T.text }}>{wb.title}</p>
-                    <p className="text-[10px] mt-0.5" style={{ color: T.textFaint }}>{formatDate(wb.updatedAt)}</p>
+                    <div className={`w-8 h-8 rounded-lg bg-gradient-to-br ${getBoardGradient(item.id)} flex items-center justify-center mb-2 shadow-sm`}>
+                      <span className="text-white text-[10px] font-black">{item.title.slice(0, 2).toUpperCase()}</span>
+                    </div>
+                    <p className="text-xs font-semibold truncate" style={{ color: T.text }}>{item.title}</p>
+                    <p className="text-[10px] mt-0.5" style={{ color: T.textFaint }}>{formatDate(item.updatedAt)}</p>
                   </motion.div>
-                ))}
+                );
+                })}
               </div>
             ) : (
               <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-2 xl:grid-cols-3 gap-3 pb-4">
-                {displayedBoards.map((wb, i) => (
+                {(workspaceType === "whiteboard" ? displayedBoards : displayedDocuments).map((item, i) => {
+                  const isWhiteboard = workspaceType === "whiteboard";
+                  const wb = item as WhiteboardItem;
+                  const doc = item as DocumentItem;
+                  // Use roomCode as fallback for key to ensure uniqueness
+                  const itemKey = isWhiteboard ? `wb-${item.id}` : `doc-${item.id || doc.roomCode}`;
+                  return (
                   <motion.div
-                    key={wb.id}
+                    key={itemKey}
                     initial={{ opacity: 0, y: 10 }}
                     animate={{ opacity: 1, y: 0 }}
                     transition={{ duration: 0.22, delay: i * 0.04 }}
@@ -1208,23 +1478,39 @@ export default function Dashboard() {
                   >
                     <div className="flex items-start gap-3">
                       {/* Color swatch */}
-                      <div className={`w-11 h-11 rounded-xl bg-gradient-to-br ${getBoardGradient(wb.id)} flex items-center justify-center shrink-0 shadow-md`}>
-                        <span className="text-white text-xs font-black">{wb.title.slice(0, 2).toUpperCase()}</span>
+                      <div className={`w-11 h-11 rounded-xl bg-linear-to-br ${getBoardGradient(item.id)} flex items-center justify-center shrink-0 shadow-md`}>
+                        <span className="text-white text-xs font-black">{item.title.slice(0, 2).toUpperCase()}</span>
                       </div>
 
                       <div className="flex-1 min-w-0">
                         <div className="flex items-start justify-between gap-2">
-                          <div className="min-w-0">
-                            <h3 className="text-sm font-semibold truncate transition-colors" style={{ color: T.text }}>{wb.title}</h3>
-                            <p className="text-[11px] font-mono mt-0.5" style={{ color: T.textFaint }}>{wb.roomCode}</p>
+                          <div className="min-w-0 flex-1">
+                            {editingId === item.id ? (
+                              <input
+                                type="text"
+                                value={editingTitle}
+                                onChange={(e) => setEditingTitle(e.target.value)}
+                                onBlur={() => handleSaveTitle(item.id, isWhiteboard)}
+                                onKeyDown={(e) => {
+                                  if (e.key === "Enter") handleSaveTitle(item.id, isWhiteboard);
+                                  if (e.key === "Escape") handleCancelEdit();
+                                }}
+                                autoFocus
+                                className="text-sm font-semibold px-2 py-1 rounded border w-full"
+                                style={{ background: T.inputBg, color: T.text, borderColor: A.ring }}
+                              />
+                            ) : (
+                              <h3 className="text-sm font-semibold truncate transition-colors" style={{ color: T.text }}>{item.title}</h3>
+                            )}
+                            <p className="text-[11px] font-mono mt-0.5" style={{ color: T.textFaint }}>{item.roomCode}</p>
                           </div>
                           <span className="text-[10px] px-2 py-0.5 rounded-full border font-semibold shrink-0 mt-0.5"
-                            style={wb.permission === "owner"
+                            style={item.permission === "owner"
                               ? { color: A.text, background: A.light, borderColor: A.ring }
-                              : wb.permission === "edit"
+                              : item.permission === "edit"
                                 ? { color: "#6ee7b7", background: "rgba(5,150,105,0.1)", borderColor: "rgba(5,150,105,0.2)" }
                                 : { color: T.textMuted, background: T.inputBg, borderColor: T.border }}>
-                            {wb.permission === "owner" ? "Owner" : wb.permission === "edit" ? "Editor" : "Viewer"}
+                            {item.permission === "owner" ? "Owner" : item.permission === "edit" ? "Editor" : "Viewer"}
                           </span>
                         </div>
                       </div>
@@ -1237,49 +1523,62 @@ export default function Dashboard() {
                           <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0z" />
                           </svg>
-                          {wb.memberCount}
+                          {item.memberCount}
                         </span>
                         <span className="flex items-center gap-1">
                           <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
                           </svg>
-                          {formatDate(wb.updatedAt)}
+                          {formatDate(item.updatedAt)}
                         </span>
                       </div>
 
                       <div className="flex items-center gap-1.5">
                         <button 
-                          onClick={e => toggleStar(wb.id, e)} 
+                          onClick={e => toggleStar(item.id, e)} 
                           className="p-1.5 rounded-lg transition-all" 
-                          style={{ color: starredIds.includes(wb.id) ? "#fbbf24" : T.textFaint }}
+                          style={{ color: starredIds.includes(item.id) ? "#fbbf24" : T.textFaint }}
                           onMouseEnter={e => { 
-                            (e.currentTarget as HTMLElement).style.color = starredIds.includes(wb.id) ? "#f59e0b" : "#fbbf24"; 
+                            (e.currentTarget as HTMLElement).style.color = starredIds.includes(item.id) ? "#f59e0b" : "#fbbf24"; 
                             (e.currentTarget as HTMLElement).style.background = "rgba(251,191,36,0.1)"; 
                           }}
                           onMouseLeave={e => { 
-                            (e.currentTarget as HTMLElement).style.color = starredIds.includes(wb.id) ? "#fbbf24" : T.textFaint; 
+                            (e.currentTarget as HTMLElement).style.color = starredIds.includes(item.id) ? "#fbbf24" : T.textFaint; 
                             (e.currentTarget as HTMLElement).style.background = "transparent"; 
                           }}
                         >
-                          <svg className="w-3.5 h-3.5" fill={starredIds.includes(wb.id) ? "currentColor" : "none"} stroke="currentColor" viewBox="0 0 24 24">
+                          <svg className="w-3.5 h-3.5" fill={starredIds.includes(item.id) ? "currentColor" : "none"} stroke="currentColor" viewBox="0 0 24 24">
                             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11.049 2.927c.3-.921 1.603-.921 1.902 0l1.519 4.674a1 1 0 00.95.69h4.915c.969 0 1.371 1.24.588 1.81l-3.976 2.888a1 1 0 00-.363 1.118l1.518 4.674c.3.922-.755 1.688-1.538 1.118l-3.976-2.888a1 1 0 00-1.176 0l-3.976 2.888c-.783.57-1.838-.197-1.538-1.118l1.518-4.674a1 1 0 00-.363-1.118l-3.976-2.888c-.784-.57-.38-1.81.588-1.81h4.914a1 1 0 00.951-.69l1.519-4.674z" />
                           </svg>
                         </button>
-                        {wb.permission === "owner" && (
+                        {item.permission === "owner" && (
                           <>
                             <button
-                              onClick={e => { e.stopPropagation(); setManagingWhiteboard(wb); }}
+                              onClick={e => { e.stopPropagation(); handleStartEditTitle(item.id, item.title); }}
                               className="p-1.5 rounded-lg transition-all"
                               style={{ color: T.textFaint }}
                               onMouseEnter={e => { (e.currentTarget as HTMLElement).style.color = A.text; (e.currentTarget as HTMLElement).style.background = A.light; }}
                               onMouseLeave={e => { (e.currentTarget as HTMLElement).style.color = T.textFaint; (e.currentTarget as HTMLElement).style.background = "transparent"; }}
                             >
                               <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4.354a4 4 0 110 5.292M15 21H3v-1a6 6 0 0112 0v1zm0 0h6v-1a6 6 0 00-9-5.197M13 7a4 4 0 11-8 0 4 4 0 018 0z" />
+                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z" />
                               </svg>
                             </button>
+                            {isWhiteboard && (
+                              <button
+                                onClick={e => { e.stopPropagation(); setManagingWhiteboard(wb); }}
+                                className="p-1.5 rounded-lg transition-all"
+                                style={{ color: T.textFaint }}
+                                onMouseEnter={e => { (e.currentTarget as HTMLElement).style.color = A.text; (e.currentTarget as HTMLElement).style.background = A.light; }}
+                                onMouseLeave={e => { (e.currentTarget as HTMLElement).style.color = T.textFaint; (e.currentTarget as HTMLElement).style.background = "transparent"; }}
+                              >
+                                <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4.354a4 4 0 110 5.292M15 21H3v-1a6 6 0 0112 0v1zm0 0h6v-1a6 6 0 00-9-5.197M13 7a4 4 0 11-8 0 4 4 0 018 0z" />
+                                </svg>
+                              </button>
+                            )}
                             <button
-                              onClick={e => { e.stopPropagation(); handleDeleteWhiteboard(wb.id); }}
+                              onClick={e => { e.stopPropagation(); isWhiteboard ? handleDeleteWhiteboard(wb.id) : handleDeleteDocument(doc.roomCode); }}
                               className="p-1.5 rounded-lg transition-all"
                               style={{ color: T.textFaint }}
                               onMouseEnter={e => { (e.currentTarget as HTMLElement).style.color = "#f87171"; (e.currentTarget as HTMLElement).style.background = "rgba(239,68,68,0.1)"; }}
@@ -1292,7 +1591,7 @@ export default function Dashboard() {
                           </>
                         )}
                         <button
-                          onClick={() => handleOpenWhiteboard(wb)}
+                          onClick={() => isWhiteboard ? handleOpenWhiteboard(wb) : handleOpenDocument(doc)}
                           className="px-3.5 py-1.5 text-white text-xs font-semibold rounded-xl transition-colors shadow-md"
                           style={{ background: A.bg }}
                           onMouseEnter={e => (e.currentTarget as HTMLElement).style.background = A.hover}
@@ -1303,7 +1602,8 @@ export default function Dashboard() {
                       </div>
                     </div>
                   </motion.div>
-                ))}
+                );
+                })}
               </div>
             )}
           </AnimatePresence>
@@ -1409,15 +1709,15 @@ export default function Dashboard() {
                     type="text"
                     value={newTitle}
                     onChange={e => setNewTitle(e.target.value)}
-                    onKeyDown={e => e.key === "Enter" && handleCreateWhiteboard()}
-                    placeholder="Board title…"
+                    onKeyDown={e => e.key === "Enter" && (workspaceType === "document" ? handleCreateDocument() : handleCreateWhiteboard())}
+                    placeholder={workspaceType === "document" ? "Document title…" : "Board title…"}
                     autoFocus
                     className="w-full px-3 py-2 rounded-xl text-sm focus:outline-none transition-all"
                   style={{ background: T.inputBg, border: `1px solid ${T.border}`, color: T.text }}
                   />
                   <div className="flex gap-2">
                     <button
-                      onClick={handleCreateWhiteboard}
+                      onClick={workspaceType === "document" ? handleCreateDocument : handleCreateWhiteboard}
                       disabled={creating}
                       className="flex-1 py-2 text-white text-xs font-semibold rounded-xl transition-colors disabled:opacity-50"
                       style={{ background: A.bg }}
@@ -1445,9 +1745,13 @@ export default function Dashboard() {
               onMouseLeave={e => (e.currentTarget as HTMLElement).style.background = A.bg}
               >
                 <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M12 4v16m8-8H4" />
+                  {workspaceType === "document" ? (
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+                  ) : (
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M12 4v16m8-8H4" />
+                  )}
                 </svg>
-                New Board
+                {workspaceType === "document" ? "New Document" : "New Board"}
               </button>
             )}
           </AnimatePresence>

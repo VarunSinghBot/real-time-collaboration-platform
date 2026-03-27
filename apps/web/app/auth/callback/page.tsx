@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useState, useRef } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useAuthService } from "@/lib/auth";
 
@@ -162,8 +162,13 @@ export default function OAuthCallbackPage() {
   const searchParams = useSearchParams();
   const authService = useAuthService();
   const [error, setError] = useState("");
+  const processingRef = useRef(false); // Prevent duplicate processing
 
   useEffect(() => {
+    // Prevent duplicate processing (React StrictMode calls useEffect twice)
+    if (processingRef.current) return;
+    processingRef.current = true;
+
     const handleCallback = async () => {
       try {
         const accessToken = searchParams.get("accessToken");

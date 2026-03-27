@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, useRef } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { authService } from "../../lib/auth";
 
@@ -6,8 +6,13 @@ export default function OAuthCallbackPage() {
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
   const [error, setError] = useState("");
+  const processingRef = useRef(false); // Prevent duplicate processing
 
   useEffect(() => {
+    // Prevent duplicate processing (React StrictMode calls useEffect twice)
+    if (processingRef.current) return;
+    processingRef.current = true;
+
     const handleCallback = async () => {
       try {
         console.log("🔐 [OAuthCallback] Starting OAuth callback processing...");

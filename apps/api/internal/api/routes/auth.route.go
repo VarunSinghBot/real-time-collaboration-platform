@@ -40,6 +40,7 @@ func SetupAuthRoutes(r chi.Router) {
 			// Google OAuth
 			r.Get("/google", controllers.GetGoogleAuthURL)
 			r.Get("/google/callback", controllers.GoogleOAuthCallback)
+			r.Post("/google/callback", controllers.GoogleOAuthCallback)
 		})
 
 		// Protected routes

@@ -40,6 +40,10 @@ export default function CollabWhiteboard() {
     const [showInviteModal, setShowInviteModal] = useState(false);
     const isApplyingRemote = useRef(false);
     const [tokensProcessed, setTokensProcessed] = useState(false);
+    const drawDebounceTimer = useRef<NodeJS.Timeout | null>(null);
+    const pendingChanges = useRef<{ added: TLRecord[], updated: TLRecord[], removed: TLRecord[] }>({ added: [], updated: [], removed: [] });
+    const [remoteCursors, setRemoteCursors] = useState<Map<string, { email: string; x: number; y: number; color: string }>>(new Map());
+    const [cameraVersion, setCameraVersion] = useState(0);
 
     // Handle authentication from URL params (cross-origin token sharing)
     useEffect(() => {
@@ -229,7 +233,38 @@ export default function CollabWhiteboard() {
                     case "presence":
                         if (msg.payload?.users) {
                             setOnlineUsers(msg.payload.users);
+                            // Clean up cursors for users who have left the room
+                            setRemoteCursors(prev => {
+                                const next = new Map(prev);
+                                const onlineIds = new Set<string>(msg.payload.users.map((u: any) => u.userId));
+                                for (const id of next.keys()) {
+                                    if (!onlineIds.has(id)) next.delete(id);
+                                }
+                                return next;
+                            });
                         }
+                        break;
+
+                    case "cursor":
+                        if (msg.userId && msg.payload) {
+                            const cp = msg.payload as { x: number; y: number };
+                            setRemoteCursors(prev => {
+                                const next = new Map(prev);
+                                next.set(msg.userId!, {
+                                    email: msg.email || msg.userId!,
+                                    x: cp.x,
+                                    y: cp.y,
+                                    color: getCursorColor(msg.userId!),
+                                });
+                                return next;
+                            });
+                        }
+                        break;
+
+                    case "deleted":
+                        // Whiteboard was deleted by owner
+                        alert(`This whiteboard has been deleted by ${msg.payload?.deletedBy || 'the owner'}.`);
+                        navigate("/dashboard");
                         break;
 
                     case "draw":
@@ -291,7 +326,7 @@ export default function CollabWhiteboard() {
         };
     }, [isAuthenticated, roomId, whiteboardData, permission]);
 
-    // Send local drawing changes via WebSocket
+    // Send local drawing changes via WebSocket (debounced to prevent jitter)
     const sendDrawChanges = useCallback(
         (added: TLRecord[], updated: TLRecord[], removed: TLRecord[]) => {
             if (
@@ -306,6 +341,34 @@ export default function CollabWhiteboard() {
             }
         },
         []
+    );
+
+    // Debounced draw change handler - batches changes to prevent jitter
+    const queueDrawChanges = useCallback(
+        (added: TLRecord[], updated: TLRecord[], removed: TLRecord[]) => {
+            // Accumulate changes
+            pendingChanges.current.added.push(...added);
+            pendingChanges.current.updated.push(...updated);
+            pendingChanges.current.removed.push(...removed);
+
+            // Clear existing timer
+            if (drawDebounceTimer.current) {
+                clearTimeout(drawDebounceTimer.current);
+            }
+
+            // Set new timer - broadcast after user stops drawing for 100ms
+            drawDebounceTimer.current = setTimeout(() => {
+                const { added: allAdded, updated: allUpdated, removed: allRemoved } = pendingChanges.current;
+                
+                if (allAdded.length || allUpdated.length || allRemoved.length) {
+                    sendDrawChanges(allAdded, allUpdated, allRemoved);
+                }
+                
+                // Reset pending changes
+                pendingChanges.current = { added: [], updated: [], removed: [] };
+            }, 100);
+        },
+        [sendDrawChanges]
     );
 
     // Handle Tldraw editor mount
@@ -327,7 +390,7 @@ export default function CollabWhiteboard() {
             }
             setIsLoaded(true);
 
-            // Listen for local store changes and broadcast
+            // Listen for local store changes and broadcast (debounced to prevent jitter)
             const unsub = editor.store.listen(
                 (entry) => {
                     if (isApplyingRemote.current) return;
@@ -348,15 +411,51 @@ export default function CollabWhiteboard() {
                     }
 
                     if (added.length || updated.length || removed.length) {
-                        sendDrawChanges(added, updated, removed);
+                        queueDrawChanges(added, updated, removed);
                     }
                 },
                 { source: "user", scope: "document" }
             );
 
-            return () => unsub();
+            // Broadcast local cursor position to other users (throttled to 20fps)
+            let lastCursorTime = 0;
+            const container = editor.getContainer();
+            const onPointerMove = (e: PointerEvent) => {
+                const now = Date.now();
+                if (now - lastCursorTime < 50) return;
+                lastCursorTime = now;
+                if (wsRef.current?.readyState !== WebSocket.OPEN) return;
+                const pagePoint = editor.screenToPage({ x: e.clientX, y: e.clientY });
+                wsRef.current.send(JSON.stringify({
+                    type: "cursor",
+                    payload: { x: pagePoint.x, y: pagePoint.y },
+                }));
+            };
+            container.addEventListener("pointermove", onPointerMove);
+
+            // Subscribe to camera changes (pan/zoom) to reposition remote cursor overlays
+            const cameraSnapshot = { camera: editor.getCamera() };
+            const unsubCamera = editor.store.listen(() => {
+                const cam = editor.getCamera();
+                if (cam.x !== cameraSnapshot.camera.x ||
+                    cam.y !== cameraSnapshot.camera.y ||
+                    cam.z !== cameraSnapshot.camera.z) {
+                    cameraSnapshot.camera = cam;
+                    setCameraVersion(v => v + 1);
+                }
+            }, { scope: "session" });
+
+            return () => {
+                unsub();
+                container.removeEventListener("pointermove", onPointerMove);
+                unsubCamera();
+                // Clear any pending debounced changes on unmount
+                if (drawDebounceTimer.current) {
+                    clearTimeout(drawDebounceTimer.current);
+                }
+            };
         },
-        [whiteboardData, sendDrawChanges, permission]
+        [whiteboardData, queueDrawChanges, permission]
     );
 
     // Auto-save whiteboard data periodically
@@ -438,9 +537,52 @@ export default function CollabWhiteboard() {
         return colors[Math.abs(hash) % colors.length];
     };
 
+    const getCursorColor = (userId: string): string => {
+        const colors = ["#e03131", "#2f9e44", "#1971c2", "#f08c00", "#7048e8", "#0ca678", "#e64980", "#f76707"];
+        let hash = 0;
+        for (let i = 0; i < userId.length; i++) {
+            hash = userId.charCodeAt(i) + ((hash << 5) - hash);
+        }
+        return colors[Math.abs(hash) % colors.length];
+    };
+
+    const handleDeleteWhiteboard = async () => {
+        if (!confirm("Are you sure you want to delete this whiteboard? This action cannot be undone and will disconnect all users.")) {
+            return;
+        }
+
+        try {
+            const authTokens = localStorage.getItem("auth_tokens");
+            if (!authTokens) return;
+            const { accessToken } = JSON.parse(authTokens);
+
+            const res = await fetch(`${API_URL}/api/collab-whiteboard/${roomId}`, {
+                method: "DELETE",
+                headers: { Authorization: `Bearer ${accessToken}` },
+            });
+
+            if (res.ok) {
+                // Notify via WebSocket before redirect
+                if (wsRef.current?.readyState === WebSocket.OPEN) {
+                    wsRef.current.send(JSON.stringify({
+                        type: "delete_notify",
+                        payload: { deletedBy: user?.email || "owner" }
+                    }));
+                }
+                alert("Whiteboard deleted successfully.");
+                navigate("/dashboard");
+            } else {
+                alert("Failed to delete whiteboard. You must be the owner.");
+            }
+        } catch (err) {
+            console.error("Failed to delete whiteboard:", err);
+            alert("An error occurred while deleting the whiteboard.");
+        }
+    };
+
     if (!tokensProcessed || loading) {
         return (
-            <div className="h-screen w-screen flex items-center justify-center bg-gradient-to-br from-violet-50 to-blue-50">
+            <div className="h-screen w-screen flex items-center justify-center bg-linear-to-br from-violet-50 to-blue-50">
                 <div className="text-center">
                     <div className="w-14 h-14 rounded-2xl flex items-center justify-center mx-auto mb-5 bg-violet-100 border border-violet-200">
                         <div className="w-7 h-7 border-2 border-violet-300 border-t-violet-600 rounded-full animate-spin"></div>
@@ -453,7 +595,7 @@ export default function CollabWhiteboard() {
 
     if (error) {
         return (
-            <div className="h-screen w-screen flex items-center justify-center bg-gradient-to-br from-red-50 to-orange-50">
+            <div className="h-screen w-screen flex items-center justify-center bg-linear-to-br from-red-50 to-orange-50">
                 <div className="text-center rounded-2xl p-8 max-w-md bg-white/80 backdrop-blur-md border border-gray-200 shadow-xl">
                     <div className="w-14 h-14 rounded-2xl flex items-center justify-center mx-auto mb-5 text-2xl bg-red-100 border border-red-200">😕</div>
                     <h2 className="text-xl font-bold text-gray-900 mb-2">Oops!</h2>
@@ -482,7 +624,7 @@ export default function CollabWhiteboard() {
                 <div className="px-4 py-2 flex items-center justify-between">
                     {/* Left: Logo + Title */}
                     <div className="flex items-center gap-3">
-                        <div className="w-7 h-7 rounded-lg flex items-center justify-center shadow-lg bg-gradient-to-br from-violet-600 to-violet-700">
+                        <div className="w-7 h-7 rounded-lg flex items-center justify-center shadow-lg bg-linear-to-br from-violet-600 to-violet-700">
                             <svg className="w-3.5 h-3.5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z" />
                             </svg>
@@ -511,7 +653,7 @@ export default function CollabWhiteboard() {
                         {onlineUsers.map((u, _) => (
                             <div
                                 key={u.userId}
-                                className={`w-7 h-7 rounded-full bg-gradient-to-br ${getUserColor(u.userId)} flex items-center justify-center text-white text-xs font-semibold -ml-1 first:ml-0 cursor-default transition-transform hover:scale-110 hover:z-10 border-2 border-white shadow-md`}
+                                className={`w-7 h-7 rounded-full bg-linear-to-br ${getUserColor(u.userId)} flex items-center justify-center text-white text-xs font-semibold -ml-1 first:ml-0 cursor-default transition-transform hover:scale-110 hover:z-10 border-2 border-white shadow-md`}
                                 title={`${u.email} (${u.permission})`}
                             >
                                 {u.email.charAt(0).toUpperCase()}
@@ -525,15 +667,27 @@ export default function CollabWhiteboard() {
                     {/* Right: Actions */}
                     <div className="flex items-center gap-2">
                         {permission === "owner" && (
-                            <button
-                                onClick={() => setShowInviteModal(true)}
-                                className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-violet-700 hover:text-violet-800 bg-violet-100 hover:bg-violet-200 border border-violet-300 rounded-lg transition-all"
-                            >
-                                <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M18 9v3m0 0v3m0-3h3m-3 0h-3m-2-5a4 4 0 11-8 0 4 4 0 018 0zM3 20a6 6 0 0112 0v1H3v-1z" />
-                                </svg>
-                                Invite
-                            </button>
+                            <>
+                                <button
+                                    onClick={() => setShowInviteModal(true)}
+                                    className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-violet-700 hover:text-violet-800 bg-violet-100 hover:bg-violet-200 border border-violet-300 rounded-lg transition-all"
+                                >
+                                    <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M18 9v3m0 0v3m0-3h3m-3 0h-3m-2-5a4 4 0 11-8 0 4 4 0 018 0zM3 20a6 6 0 0112 0v1H3v-1z" />
+                                    </svg>
+                                    Invite
+                                </button>
+                                <button
+                                    onClick={handleDeleteWhiteboard}
+                                    className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-red-700 hover:text-red-800 bg-red-50 hover:bg-red-100 border border-red-300 rounded-lg transition-all"
+                                    title="Delete whiteboard"
+                                >
+                                    <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                                    </svg>
+                                    Delete
+                                </button>
+                            </>
                         )}
                         {canEdit && (
                             <>
@@ -545,7 +699,7 @@ export default function CollabWhiteboard() {
                                 <button
                                     onClick={saveWhiteboard}
                                     disabled={isSaving}
-                                    className="px-3 py-1.5 text-xs font-semibold text-white bg-gradient-to-r from-violet-600 to-violet-700 hover:from-violet-700 hover:to-violet-800 border border-violet-600 rounded-lg shadow-md transition-all disabled:opacity-50"
+                                    className="px-3 py-1.5 text-xs font-semibold text-white bg-linear-to-r from-violet-600 to-violet-700 hover:from-violet-700 hover:to-violet-800 border border-violet-600 rounded-lg shadow-md transition-all disabled:opacity-50"
                                 >
                                     {isSaving ? "Saving..." : "Save"}
                                 </button>
@@ -553,7 +707,7 @@ export default function CollabWhiteboard() {
                         )}
                         {/* User chip */}
                         <div className="flex items-center gap-2 px-2.5 py-1.5 rounded-lg bg-gray-100 border border-gray-200">
-                            <div className="w-6 h-6 rounded-full flex items-center justify-center text-white font-semibold text-[10px] bg-gradient-to-br from-violet-600 to-violet-700 shadow-md">
+                            <div className="w-6 h-6 rounded-full flex items-center justify-center text-white font-semibold text-[10px] bg-linear-to-br from-violet-600 to-violet-700 shadow-md">
                                 {user?.name ? getInitials(user.name) : user?.email?.charAt(0).toUpperCase()}
                             </div>
                             <span className="text-xs font-medium text-gray-900 hidden sm:block">
@@ -579,6 +733,49 @@ export default function CollabWhiteboard() {
                     onMount={handleMount}
                     options={canEdit ? undefined : { maxPages: 1 }}
                 />
+
+                {/* Figma-like collaborative cursors — rendered in Tldraw page-coordinate space */}
+                {remoteCursors.size > 0 && editorRef.current && (
+                    <div className="absolute inset-0 pointer-events-none z-40 overflow-hidden" key={cameraVersion}>
+                        {Array.from(remoteCursors.values()).map(cursor => {
+                            const sp = editorRef.current!.pageToScreen({ x: cursor.x, y: cursor.y });
+                            const name = cursor.email.includes("@") ? cursor.email.split("@")[0] : cursor.email;
+                            return (
+                                <div
+                                    key={cursor.email}
+                                    className="absolute"
+                                    style={{ left: sp.x, top: sp.y, transform: "translate(0,0)" }}
+                                >
+                                    {/* Cursor arrow */}
+                                    <svg width="15" height="21" viewBox="0 0 15 21" fill="none" xmlns="http://www.w3.org/2000/svg">
+                                        <path
+                                            d="M0.5 0.5V16.5L4.5 11.5H11.5L0.5 0.5Z"
+                                            fill={cursor.color}
+                                            stroke="white"
+                                            strokeWidth="1.2"
+                                            strokeLinejoin="round"
+                                        />
+                                        <path
+                                            d="M4.5 11.5L7 18.5L9 17.5L6.5 10.5"
+                                            fill={cursor.color}
+                                            stroke="white"
+                                            strokeWidth="1.2"
+                                            strokeLinecap="round"
+                                            strokeLinejoin="round"
+                                        />
+                                    </svg>
+                                    {/* Username tag */}
+                                    <div
+                                        className="absolute top-5 left-3 whitespace-nowrap text-white text-[11px] font-semibold px-2 py-0.5 rounded-full shadow-md leading-4"
+                                        style={{ backgroundColor: cursor.color }}
+                                    >
+                                        {name}
+                                    </div>
+                                </div>
+                            );
+                        })}
+                    </div>
+                )}
 
                 {/* Read-only overlay */}
                 {!canEdit && (

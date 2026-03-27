@@ -6,6 +6,7 @@ import (
 	"log"
 	"net/http"
 	"sync"
+	"sync/atomic"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/gorilla/websocket"
@@ -41,8 +42,17 @@ type RoomManager struct {
 	mu    sync.RWMutex
 }
 
+// activeConnections tracks the total number of connected WebSocket clients
+// using sync/atomic for lock-free, thread-safe counting.
+var activeConnections int64
+
 var manager = &RoomManager{
 	rooms: make(map[string]map[*Client]bool),
+}
+
+// GetManager returns the global room manager instance
+func GetManager() *RoomManager {
+	return manager
 }
 
 // AddClient adds a client to a room
@@ -53,6 +63,7 @@ func (rm *RoomManager) AddClient(roomID string, client *Client) {
 		rm.rooms[roomID] = make(map[*Client]bool)
 	}
 	rm.rooms[roomID][client] = true
+	atomic.AddInt64(&activeConnections, 1)
 }
 
 // RemoveClient removes a client from a room
@@ -61,10 +72,17 @@ func (rm *RoomManager) RemoveClient(roomID string, client *Client) {
 	defer rm.mu.Unlock()
 	if clients, ok := rm.rooms[roomID]; ok {
 		delete(clients, client)
+		atomic.AddInt64(&activeConnections, -1)
 		if len(clients) == 0 {
 			delete(rm.rooms, roomID)
 		}
 	}
+}
+
+// GetActiveConnectionCount returns the current number of active WebSocket
+// connections using an atomic load (lock-free read).
+func GetActiveConnectionCount() int64 {
+	return atomic.LoadInt64(&activeConnections)
 }
 
 // BroadcastToRoom sends a message to all clients in a room except the sender
@@ -234,14 +252,14 @@ func HandleCollabWS(w http.ResponseWriter, r *http.Request) {
 			manager.BroadcastToRoom(roomID, client, broadcastData)
 
 		case "sync":
-			// Full sync request — broadcast to all others
+			// Full sync request â€” broadcast to all others
 			wsMsg.UserID = claims.UserID
 			wsMsg.Email = claims.Email
 			broadcastData, _ := json.Marshal(wsMsg)
 			manager.BroadcastToRoom(roomID, client, broadcastData)
 
 		case "cursor":
-			// Cursor position updates — broadcast to others
+			// Cursor position updates â€” broadcast to others
 			wsMsg.UserID = claims.UserID
 			wsMsg.Email = claims.Email
 			broadcastData, _ := json.Marshal(wsMsg)
